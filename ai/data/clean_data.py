@@ -17,6 +17,7 @@ BIO scheme:
     O  (outside)
 """
 
+import json
 import re
 from preprocess import preprocess_split
 
@@ -118,6 +119,14 @@ if __name__ == "__main__":
     train = clean_split(r"D:\invoice-document-intelligence\Dataset\train")
     test  = clean_split(r"D:\invoice-document-intelligence\Dataset\test")
 
+    with open("train.json", "w", encoding="utf-8") as f:
+        json.dump(train, f, ensure_ascii=False, indent=2)
+
+    with open("test.json", "w", encoding="utf-8") as f:
+        json.dump(test, f, ensure_ascii=False, indent=2)
+
+    print("✅ Data saved as train.json and test.json")
+    
     if train:
         r = train[0]
         print(f"\nid      : {r['id']}")
