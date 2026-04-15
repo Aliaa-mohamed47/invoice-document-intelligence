@@ -115,8 +115,8 @@ def clean_split(split_dir: str) -> list[dict]:
 
 
 if __name__ == "__main__":
-    train = clean_split("SROIE2019/train")
-    test  = clean_split("SROIE2019/test")
+    train = clean_split(r"D:\invoice-document-intelligence\Dataset\train")
+    test  = clean_split(r"D:\invoice-document-intelligence\Dataset\test")
 
     if train:
         r = train[0]
