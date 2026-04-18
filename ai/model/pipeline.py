@@ -1,10 +1,8 @@
-import json, torch
+import json, torch, os
 from transformers import LayoutLMForTokenClassification, LayoutLMTokenizerFast
 
-LABEL_LIST  = ["O","B-COMPANY","I-COMPANY","B-DATE","I-DATE",
-               "B-TOTAL","I-TOTAL","B-ADDRESS","I-ADDRESS"]
-LABEL2ID    = {label: idx for idx, label in enumerate(LABEL_LIST)}
-ID2LABEL    = {idx: label for label, idx in LABEL2ID.items()}
+from model import LABEL_LIST, LABEL2ID, ID2LABEL, TOKENIZER
+
 PAGE_WIDTH  = 762
 PAGE_HEIGHT = 1000
 MODEL_PATH  = "/content/invoice-document-intelligence/ai/model/saved_model"
@@ -27,8 +25,10 @@ def predict(tokens, bboxes, model, tokenizer):
     word_ids    = encoding.word_ids()
     bbox_tensor = [norm[wid] if wid is not None else [0,0,0,0] for wid in word_ids]
     encoding["bbox"] = torch.tensor([bbox_tensor], dtype=torch.long)
+    
     with torch.no_grad():
         outputs = model(**encoding)
+    
     preds   = torch.argmax(outputs.logits, dim=-1)[0].tolist()
     results, seen = [], set()
     for idx, wid in enumerate(word_ids):
@@ -42,18 +42,22 @@ def extract_entities(tokens, bboxes, model, tokenizer):
     buckets   = {"company":[],"date":[],"total":[],"address":[]}
     for item in predict(tokens, bboxes, model, tokenizer):
         if item["label"] == "O": continue
-        _, etype = item["label"].split("-",1)
+        parts = item["label"].split("-")
+        if len(parts) < 2: continue
+        etype = parts[1]
         key = label_map.get(etype)
         if key: buckets[key].append(item["token"])
     return {k: " ".join(v) for k, v in buckets.items()}
 
 if __name__ == "__main__":
-    tokens = ["KEDAI","GUNTING","RAMBUT","No","12","Jalan","Maju",
-              "Date:","01/01/2023","Total:","RM","25.00"]
-    bboxes = [[200,50,400,70],[140,50,460,70],[160,50,440,70],
-              [80,120,200,140],[210,120,240,140],[250,120,340,140],[350,120,430,140],
-              [80,800,180,820],[190,800,340,820],
-              [80,920,180,940],[190,920,230,940],[240,920,320,940]]
-    model, tokenizer = load_model()
-    result = extract_entities(tokens, bboxes, model, tokenizer)
-    print(json.dumps(result, indent=2))
+    tokens = ["KEDAI", "GUNTING", "Date:", "01/01/2023", "Total:", "25.00"]
+    bboxes = [[100,100,200,120], [210,100,300,120], [100,200,150,220], 
+              [160,200,250,220], [100,300,150,320], [160,300,220,320]]
+    
+    if os.path.exists(MODEL_PATH):
+        model, tokenizer = load_model()
+        result = extract_entities(tokens, bboxes, model, tokenizer)
+        print("\n--- Inference Result ---")
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"⚠️ Model not found at {MODEL_PATH}. Run training first.")
