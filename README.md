@@ -67,4 +67,4 @@ Upload an invoice file (image/PDF)
 
 ## 👩‍💻 Team
 
-Aliaa • A`laa • Waad • Sama • A`laa • Fatma
+Aliaa • Alaa • Waad • Sama • Fatma • A`laa
