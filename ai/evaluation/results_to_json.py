@@ -1,6 +1,3 @@
-# results_to_json.py
-# converts raw model predictions into structured invoice JSON
-
 import time
 import uuid
 import json
@@ -15,10 +12,10 @@ def format_output(invoice_id, raw_prediction, start_time):
     Args:
         invoice_id      : str like "INV_001", or None to auto-generate
         raw_prediction  : dict from model inference
-                          e.g. {"company": "ABC Corp", "date": "2024-01-15",
+                            e.g. {"company": "ABC Corp", "date": "2024-01-15",
                                 "total": "$500", "address": "Cairo"}
-                          Optionally includes confidence keys:
-                          {"company_score": 0.93, "date_score": 0.88, ...}
+                            Optionally includes confidence keys:
+                            {"company_score": 0.93, "date_score": 0.88, ...}
         start_time      : float from time.time() captured before inference
 
     Returns:

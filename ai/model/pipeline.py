@@ -21,7 +21,7 @@ def load_model(model_path=MODEL_PATH):
 def predict(tokens, bboxes, model, tokenizer):
     norm     = [normalize_bbox(b) for b in bboxes]
     encoding = tokenizer(tokens, is_split_into_words=True,
-                         return_tensors="pt", truncation=True, max_length=512)
+                        return_tensors="pt", truncation=True, max_length=512)
     word_ids    = encoding.word_ids()
     bbox_tensor = [norm[wid] if wid is not None else [0,0,0,0] for wid in word_ids]
     encoding["bbox"] = torch.tensor([bbox_tensor], dtype=torch.long)
@@ -52,7 +52,7 @@ def extract_entities(tokens, bboxes, model, tokenizer):
 if __name__ == "__main__":
     tokens = ["KEDAI", "GUNTING", "Date:", "01/01/2023", "Total:", "25.00"]
     bboxes = [[100,100,200,120], [210,100,300,120], [100,200,150,220], 
-              [160,200,250,220], [100,300,150,320], [160,300,220,320]]
+            [160,200,250,220], [100,300,150,320], [160,300,220,320]]
     
     if os.path.exists(MODEL_PATH):
         model, tokenizer = load_model()

@@ -1,7 +1,3 @@
-# generate_charts.py
-# generates evaluation charts from results JSON files
-# Run AFTER both evaluate.py and generate_baseline.py have been run
-
 import json
 import os
 import matplotlib.pyplot as plt
@@ -72,7 +68,7 @@ width = 0.25
 for i, (metric, color) in enumerate(zip(metrics_keys, colors)):
     vals = [finetuned["per_field"][f][metric] for f in FIELDS]
     bars = ax.bar(x + (i - 1) * width, vals, width,
-                  label=metric.capitalize(), color=color, alpha=0.85)
+                label=metric.capitalize(), color=color, alpha=0.85)
     for bar in bars:
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
                 f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=9)
@@ -82,7 +78,7 @@ ax.set_xticklabels([f.capitalize() for f in FIELDS], fontsize=12)
 ax.set_ylim(0, 1.15)
 ax.set_ylabel("Score", fontsize=12)
 ax.set_title("Fine-tuned Model: Precision / Recall / F1 per Field",
-             fontsize=14, fontweight="bold")
+            fontsize=14, fontweight="bold")
 ax.legend(fontsize=11)
 ax.grid(axis="y", linestyle="--", alpha=0.4)
 ax.spines["top"].set_visible(False)

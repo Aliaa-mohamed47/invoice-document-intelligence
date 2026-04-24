@@ -12,22 +12,18 @@ from transformers import (
     TrainingArguments,
 )
 
-# تنظيف الذاكرة قبل البدء
 gc.collect()
 torch.cuda.empty_cache()
 
-# ── 1. المسارات (Paths) ────────────────────────────────────────────────────────
 BASE_DIR   = "/content/invoice-document-intelligence"
 TRAIN_JSON = f"{BASE_DIR}/ai/data/train.json"
 TEST_JSON  = f"{BASE_DIR}/ai/data/test.json"
 OUTPUT_DIR = f"{BASE_DIR}/ai/model/saved_model"
 BEST_DIR   = f"{BASE_DIR}/ai/model/best_model"
 
-# تنظيف المجلدات القديمة لضمان Fresh Start
 if os.path.exists(OUTPUT_DIR): shutil.rmtree(OUTPUT_DIR)
 if os.path.exists(BEST_DIR):   shutil.rmtree(BEST_DIR)
 
-# ── 2. تعريف الـ Labels ────────────────────────────────────────────────────────
 LABEL_LIST  = ["O","B-COMPANY","I-COMPANY","B-DATE","I-DATE",
                "B-TOTAL","I-TOTAL","B-ADDRESS","I-ADDRESS"]
 LABEL_TO_ID = {l: i for i, l in enumerate(LABEL_LIST)}
@@ -37,10 +33,8 @@ tokenizer   = LayoutLMTokenizerFast.from_pretrained("microsoft/layoutlm-base-unc
 PAGE_WIDTH  = 762
 PAGE_HEIGHT = 1000
 
-# ── 3. دوال المساعدة (Helpers) ─────────────────────────────────────────────────
 def normalize_bbox(bbox, w=PAGE_WIDTH, h=PAGE_HEIGHT):
     x0, y0, x1, y1 = bbox
-    # تحويل الإحداثيات لمدى [0, 1000] وهو المطلوب لـ LayoutLM
     nx0 = max(0, min(int(1000 * x0 / w), 1000))
     ny0 = max(0, min(int(1000 * y0 / h), 1000))
     nx1 = max(0, min(int(1000 * x1 / w), 1000))
@@ -77,7 +71,6 @@ def tokenize_and_align(examples):
                 label_ids.append(LABEL_TO_ID[labels[word_id]])
                 bbox_ids.append(norm[word_id])
             else:
-                # الـ Sub-tokens بنحطلهم -100 عشان الـ Loss ميتأثرش بيهم
                 label_ids.append(-100)
                 bbox_ids.append(norm[word_id])
             prev_word_id = word_id
@@ -89,7 +82,6 @@ def tokenize_and_align(examples):
     tokenized["bbox"] = all_bboxes
     return tokenized
 
-# ── 4. بناء الـ Datasets ───────────────────────────────────────────────────────
 def build_dataset(json_path):
     with open(json_path, "r", encoding="utf-8") as f:
         records = json.load(f)
@@ -112,12 +104,10 @@ def compute_metrics(eval_pred):
         true_labels.append(tl); true_preds.append(tp)
     return {"f1": f1_score(true_labels, true_preds)}
 
-# تجهيز البيانات
 print("🔄 Loading and Tokenizing data...")
 train_ds = build_dataset(TRAIN_JSON)
 test_ds  = build_dataset(TEST_JSON)
 
-# ── 5. إعداد الموديل والتدريب ──────────────────────────────────────────────────
 model = LayoutLMForTokenClassification.from_pretrained(
     "microsoft/layoutlm-base-uncased",
     num_labels=len(LABEL_LIST),
@@ -158,7 +148,6 @@ trainer = Trainer(
 print("🚀 Starting fine-tuning...")
 trainer.train()
 
-# ── 6. حفظ الموديل النهائي ─────────────────────────────────────────────────────
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 model.save_pretrained(OUTPUT_DIR)
 tokenizer.save_pretrained(OUTPUT_DIR)

@@ -1,0 +1,89 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Invoice Document Intelligence System
+# Docker Compose
+#
+# علياء:   inference-api  (port 8000)
+# فاطمة:   backend        (port 8080)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── 1. FastAPI Inference Service (علياء) ──────────────────────────────────
+  inference-api:
+    build:
+      context: ./inference_api
+      dockerfile: Dockerfile
+    container_name: invoice-inference
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=/app/ai/model/saved_model
+      - S3_BUCKET=${S3_BUCKET:-invoice-intelligence-bucket}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./ai/model/saved_model:/app/ai/model/saved_model:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - invoice-net
+    restart: unless-stopped
+
+  # ── 2. FastAPI Backend (فاطمة) ─────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: invoice-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - INFERENCE_API_URL=http://inference-api:8000
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-password}@db:5432/invoicedb
+      - S3_BUCKET=${S3_BUCKET:-invoice-intelligence-bucket}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      inference-api:
+        condition: service_healthy
+    networks:
+      - invoice-net
+    restart: unless-stopped
+
+  # ── 3. PostgreSQL Database ─────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: invoice-db
+    environment:
+      - POSTGRES_DB=invoicedb
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - invoice-net
+    restart: unless-stopped
+
+# ── Volumes & Networks ─────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+
+networks:
+  invoice-net:
+    driver: bridge

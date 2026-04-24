@@ -18,6 +18,12 @@ TOKENIZER   = LayoutLMTokenizerFast.from_pretrained("microsoft/layoutlm-base-unc
 
 def normalize_bbox(bbox, width=PAGE_WIDTH, height=PAGE_HEIGHT):
     x0, y0, x1, y1 = bbox
+
+    x0 = max(0, min(x0, width))
+    y0 = max(0, min(y0, height))
+    x1 = max(0, min(x1, width))
+    y1 = max(0, min(y1, height))
+
     return [
         int(1000 * x0 / width),
         int(1000 * y0 / height),

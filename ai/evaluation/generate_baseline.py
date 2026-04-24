@@ -1,7 +1,3 @@
-# generate_baseline.py
-# generates baseline (pre fine-tuning) results for comparison
-# Run this ONCE before running evaluate.py
-
 import json
 import os
 import random

@@ -1,5 +1,3 @@
-# evaluate.py
-
 import json
 import time
 import os
@@ -100,7 +98,7 @@ def real_predict(tokens, model, tokenizer):
     max_probs = probs.max(dim=-1).values.tolist()
 
     field_map = {"COMPANY": "company", "DATE": "date",
-                 "TOTAL": "total", "ADDRESS": "address"}
+                "TOTAL": "total", "ADDRESS": "address"}
     entities     = {f: [] for f in FIELDS}
     entity_probs = {f: [] for f in FIELDS}
 
@@ -169,7 +167,7 @@ def compute_metrics(ground_truths, predictions):
     precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
     recall    = TP / (TP + FN) if (TP + FN) > 0 else 0.0
     f1 = ((2 * precision * recall) / (precision + recall)
-          if (precision + recall) > 0 else 0.0)
+        if (precision + recall) > 0 else 0.0)
 
     return {
         "precision": round(precision, 4),
@@ -241,7 +239,7 @@ def compare():
         bf = b["per_field"][field]["f1"]
         ff = f["per_field"][field]["f1"]
         print(f"{field:<12} {bf:>9.4f} {ff:>9.4f} {ff-bf:>+9.4f} "
-              f"{'✓' if ff > bf else '✗':>10}")
+            f"{'✓' if ff > bf else '✗':>10}")
     print("─" * 54)
     bm = b["macro_avg"]["f1"]
     fm = f["macro_avg"]["f1"]
