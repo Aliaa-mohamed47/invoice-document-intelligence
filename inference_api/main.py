@@ -121,9 +121,24 @@ def upload_to_s3(file_bytes: bytes, filename: str) -> str | None:
 # ── OCR extraction ────────────────────────────────────────────────────────────
 def extract_tokens_from_image(image: Image.Image):
     img = np.array(image)
+    
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)[1]
-
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    gray = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY, 11, 2
+    )
+    coords = np.column_stack(np.where(gray > 0))
+    if len(coords) > 0:
+        angle = cv2.minAreaRect(coords)[-1]
+        angle = -(90 + angle) if angle < -45 else -angle
+        if abs(angle) > 0.5:
+            h, w = gray.shape
+            M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+            gray = cv2.warpAffine(gray, M, (w, h),
+                                flags=cv2.INTER_CUBIC,
+                                borderMode=cv2.BORDER_REPLICATE)
     data = pytesseract.image_to_data(
         gray,
         output_type=pytesseract.Output.DICT
@@ -253,8 +268,16 @@ def run_inference(tokens: list, bboxes: list) -> dict:
             if entity_probs[f] else 0.0
         )
 
+    text = " ".join(tokens)
+    for f in FIELDS:
+        if result[f] is None or result[f"{f}_score"] < 0.60:
+            fb = fallback_extraction(tokens)
+            if fb.get(f):
+                result[f] = fb[f]
+                result[f"{f}_score"] = fb.get(f"{f}_score", 0.50)
+
     if all(result[f] is None for f in FIELDS):
-        logger.warning("Empty model output → fallback extraction used")
+        logger.warning("Empty model output → full fallback used")
         return fallback_extraction(tokens)
 
     return result

@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 import sys
 import torch
 from transformers import AutoTokenizer, LayoutLMForTokenClassification
@@ -103,34 +104,95 @@ def predict(tokens, bboxes, model, tokenizer,
 
 
 # ── Entity extraction ─────────────────────────────────────────────────────────
+def regex_fallback(field: str, tokens: list[str]) -> str | None:
+    text = " ".join(tokens)
+    patterns = {
+        "date":    r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b',
+        "total":   r'(?:total|amount|grand)[^\d]{0,10}(\d+[\.,]\d{2})',
+        "company": r'^([A-Z][A-Za-z0-9\s&\.\,]+?)(?:\n|$)',
+        "address": r'(\d+[,\s]+[A-Za-z\s]+(?:street|st|road|rd|ave|jalan|jln)[^\n]*)',
+    }
+    pat = patterns.get(field)
+    if not pat:
+        return None
+    m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
 def extract_entities(tokens, bboxes, model, tokenizer,
-                     img_width=PAGE_WIDTH, img_height=PAGE_HEIGHT):
+                     img_width=PAGE_WIDTH, img_height=PAGE_HEIGHT,
+                     confidence_threshold=0.70):
     """
-    Returns structured fields:
-    company, date, total, address
+    Returns structured fields with confidence scores.
+    Falls back to regex if model confidence is below threshold.
     """
-    buckets = {f: [] for f in FIELDS}
+    buckets      = {f: [] for f in FIELDS}
+    conf_buckets = {f: [] for f in FIELDS}
 
-    for item in predict(tokens, bboxes, model, tokenizer,
-                        img_width, img_height):
+    raw_preds = predict(tokens, bboxes, model, tokenizer, img_width, img_height)
 
-        if item["label"] == "O":
+    # collect logits per token for confidence
+    norm = [normalize_bbox(b, img_width, img_height) for b in bboxes]
+    encoding = tokenizer(
+        tokens,
+        is_split_into_words=True,
+        return_tensors="pt",
+        truncation=True,
+        max_length=MAX_SEQ_LENGTH,
+        padding="max_length",
+    )
+    word_ids = encoding.word_ids()
+    bbox_tensor = [norm[wid] if wid is not None else [0,0,0,0] for wid in word_ids]
+    encoding["bbox"] = torch.tensor([bbox_tensor], dtype=torch.long)
+
+    with torch.no_grad():
+        outputs = model(**encoding)
+
+    probs = torch.softmax(outputs.logits, dim=-1)[0]
+
+    seen = set()
+    for idx, wid in enumerate(word_ids):
+        if wid is None or wid in seen:
+            continue
+        seen.add(wid)
+
+        label     = ID2LABEL[torch.argmax(probs[idx]).item()]
+        conf      = probs[idx].max().item()
+
+        if label == "O":
             continue
 
-        parts = item["label"].split("-")
-
+        parts = label.split("-")
         if len(parts) < 2:
             continue
 
         key = FIELD_MAP.get(parts[1])
-
         if key:
-            buckets[key].append(item["token"])
+            buckets[key].append(tokens[wid])
+            conf_buckets[key].append(conf)
 
-    return {
-        k: " ".join(v) if v else None
-        for k, v in buckets.items()
-    }
+    result = {}
+    for field in FIELDS:
+        if buckets[field]:
+            avg_conf = sum(conf_buckets[field]) / len(conf_buckets[field])
+            value    = " ".join(buckets[field])
+
+            if avg_conf < confidence_threshold:
+                fallback = regex_fallback(field, tokens)
+                if fallback:
+                    value    = fallback
+                    avg_conf = 0.60  # regex confidence ثابتة
+
+            result[field] = {"value": value, "confidence": round(avg_conf, 2)}
+        else:
+            # model didn't find anything — try regex directly
+            fallback = regex_fallback(field, tokens)
+            result[field] = {
+                "value":      fallback,
+                "confidence": 0.55 if fallback else 0.0,
+            }
+
+    return result
 
 
 # ── Quick test ────────────────────────────────────────────────────────────────

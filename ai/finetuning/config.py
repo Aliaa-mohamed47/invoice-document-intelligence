@@ -23,11 +23,11 @@ NUM_LABELS = len(LABEL_LIST)
 NUM_TRAIN_EPOCHS        = 15
 PER_DEVICE_TRAIN_BATCH  = 16
 PER_DEVICE_EVAL_BATCH   = 16
-LEARNING_RATE           = 3e-5
+LEARNING_RATE           = 2e-5
 WARMUP_STEPS            = 100
 WEIGHT_DECAY            = 0.01
 LR_SCHEDULER            = "cosine"
-EARLY_STOPPING_PATIENCE = 5
+EARLY_STOPPING_PATIENCE = 3
 MAX_SEQ_LENGTH          = 512
 
 # ── LoRA (stretch experiment) ─────────────────────────────────────────────────
