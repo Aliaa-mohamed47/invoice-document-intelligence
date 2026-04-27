@@ -131,7 +131,7 @@ def clean_split(split_dir: str) -> list[dict]:
 if __name__ == "__main__":
     dataset_base = os.environ.get(
         "DATASET_DIR",
-        os.path.join(os.path.dirname(__file__), "..", "..", "Dataset")
+        os.path.join(os.path.dirname(__file__), "SROIE2019")
     )
     out_dir = os.path.dirname(__file__)
 
