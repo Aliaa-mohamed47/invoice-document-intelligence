@@ -1,10 +1,6 @@
-# inference_api/main.py
+# inference_api/main.py  ── FIXED VERSION
 # ─────────────────────────────────────────────────────────────────────────────
 # FastAPI Inference Service — Invoice Document Intelligence
-# Aliaa (Team Lead / Cloud & Integration)
-#
-# Input : PDF or image invoice
-# Output: structured JSON (company, date, total, address)
 # ─────────────────────────────────────────────────────────────────────────────
 
 import io
@@ -26,57 +22,46 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from transformers import LayoutLMForTokenClassification, LayoutLMTokenizerFast
 
-# Windows only setup for Tesseract
 if os.name == "nt":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-# ✅ import centralized config
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from ai.finetuning.config import (
     LABEL_LIST, LABEL2ID, ID2LABEL,
     PAGE_WIDTH, PAGE_HEIGHT, MAX_SEQ_LENGTH,
 )
 
-# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("invoice-api")
 
-# ── Configuration ─────────────────────────────────────────────────────────────
 MODEL_PATH = os.getenv("MODEL_PATH", "ai/model/saved_model")
 S3_BUCKET  = os.getenv("S3_BUCKET", "invoice-intelligence-bucket")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
 FIELDS = ["company", "date", "total", "address"]
-
 FIELD_MAP = {
     "COMPANY": "company",
-    "DATE": "date",
-    "TOTAL": "total",
+    "DATE":    "date",
+    "TOTAL":   "total",
     "ADDRESS": "address",
 }
 
-# ── Model state ───────────────────────────────────────────────────────────────
-model = None
+model     = None
 tokenizer = None
 
 
 def load_model_on_startup():
     global model, tokenizer
-
     if not os.path.exists(MODEL_PATH):
         logger.warning(f"Model not found at {MODEL_PATH} — running in MOCK mode")
         return
-
     logger.info(f"Loading model from {MODEL_PATH} ...")
-
     tokenizer = LayoutLMTokenizerFast.from_pretrained(MODEL_PATH)
-    model = LayoutLMForTokenClassification.from_pretrained(MODEL_PATH)
+    model     = LayoutLMForTokenClassification.from_pretrained(MODEL_PATH)
     model.eval()
-
     logger.info("Model loaded successfully")
 
 
-# ── FastAPI lifespan ──────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_model_on_startup()
@@ -86,7 +71,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Invoice Intelligence API",
     description="Extract structured invoice fields using LayoutLM",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -101,73 +86,72 @@ app.add_middleware(
 # ── S3 upload ─────────────────────────────────────────────────────────────────
 def upload_to_s3(file_bytes: bytes, filename: str) -> str | None:
     try:
-        s3 = boto3.client("s3", region_name=AWS_REGION)
+        s3  = boto3.client("s3", region_name=AWS_REGION)
         key = f"invoices/{uuid.uuid4().hex}/{filename}"
-
-        s3.put_object(
-            Bucket=S3_BUCKET,
-            Key=key,
-            Body=file_bytes
-        )
-
+        s3.put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
         logger.info(f"Uploaded to S3: {key}")
         return key
-
     except Exception as e:
         logger.error(f"S3 upload failed: {e}")
         return None
 
 
 # ── OCR extraction ────────────────────────────────────────────────────────────
+# FIX 1: PIL is RGB — convert correctly to grayscale without BGR flip
 def extract_tokens_from_image(image: Image.Image):
-    img = np.array(image)
-    
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    gray = cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY, 11, 2
-    )
+    """
+    Returns (tokens, bboxes, img_width, img_height).
+    We return actual image dimensions so normalize_bbox works correctly.
+    """
+    img_width, img_height = image.size          # PIL: (width, height)
+
+    # ✅ FIX: PIL → numpy RGB → grayscale directly (no BGR conversion)
+    img_np = np.array(image.convert("RGB"))
+    gray   = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+
+    # Deskew
     coords = np.column_stack(np.where(gray > 0))
     if len(coords) > 0:
         angle = cv2.minAreaRect(coords)[-1]
         angle = -(90 + angle) if angle < -45 else -angle
         if abs(angle) > 0.5:
             h, w = gray.shape
-            M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+            M    = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
             gray = cv2.warpAffine(gray, M, (w, h),
-                                flags=cv2.INTER_CUBIC,
-                                borderMode=cv2.BORDER_REPLICATE)
+                                  flags=cv2.INTER_CUBIC,
+                                  borderMode=cv2.BORDER_REPLICATE)
+
+    # Adaptive threshold
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    gray = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY, 11, 2,
+    )
+
     data = pytesseract.image_to_data(
-        gray,
-        output_type=pytesseract.Output.DICT
+        gray, output_type=pytesseract.Output.DICT
     )
 
     tokens, bboxes = [], []
-
     for i, text in enumerate(data["text"]):
         if not text.strip():
             continue
-
-        x, y, w, h = (
-            data["left"][i],
-            data["top"][i],
-            data["width"][i],
-            data["height"][i],
-        )
-
+        conf = int(data["conf"][i])
+        if conf < 30:          # ✅ FIX: skip low-confidence OCR noise
+            continue
+        x, y, w, h = data["left"][i], data["top"][i], data["width"][i], data["height"][i]
         tokens.append(text.strip())
         bboxes.append([x, y, x + w, y + h])
 
     logger.debug(f"OCR extracted {len(tokens)} tokens")
-    return tokens, bboxes
+    return tokens, bboxes, img_width, img_height
 
 
-# ── Bounding box normalization ───────────────────────────────────────────────
-def normalize_bbox(bbox, w=PAGE_WIDTH, h=PAGE_HEIGHT):
+# ── Bounding box normalization ────────────────────────────────────────────────
+# FIX 2: use actual image dimensions, not hardcoded PAGE_WIDTH/HEIGHT
+def normalize_bbox(bbox, w, h):
     x0, y0, x1, y1 = bbox
-
     return [
         max(0, min(int(1000 * x0 / w), 1000)),
         max(0, min(int(1000 * y0 / h), 1000)),
@@ -176,40 +160,78 @@ def normalize_bbox(bbox, w=PAGE_WIDTH, h=PAGE_HEIGHT):
     ]
 
 
-# ── Fallback rule-based extraction ────────────────────────────────────────────
+# ── Improved fallback extraction ──────────────────────────────────────────────
+# FIX 3: proper regex fallback — no more tokens[0] as company
 def fallback_extraction(tokens: list) -> dict:
     text = " ".join(tokens)
 
-    dates = re.findall(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", text)
-    totals = re.findall(r"(?:RM\s?)?\d+\.\d{2}", text)
+    # Date patterns
+    date_patterns = [
+        r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b',
+        r'\b(\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})\b',
+        r'\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{2,4})\b',
+    ]
+    date = None
+    for pat in date_patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            date = m.group(1)
+            break
+
+    # Total patterns — prefer lines that explicitly say total/amount
+    total = None
+    total_patterns = [
+        r'(?:TOTAL|AMOUNT|GRAND\s*TOTAL)[^\d]{0,15}(RM\s*)?(\d[\d,]*\.\d{2})',
+        r'(?:RM\s*)(\d[\d,]*\.\d{2})\s*$',
+        r'\b(\d[\d,]*\.\d{2})\b',
+    ]
+    for pat in total_patterns:
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            total = m.group(m.lastindex)
+            break
+
+    # Company — look for ALL CAPS lines near the top (first 30% of tokens)
+    company = None
+    top_tokens = tokens[:max(1, len(tokens) // 3)]
+    top_text   = " ".join(top_tokens)
+    caps_m     = re.search(r'\b([A-Z][A-Z\s&\.]{3,40})\b', top_text)
+    if caps_m:
+        company = caps_m.group(1).strip()
+
+    # Address — look for street keywords
+    address = None
+    addr_m  = re.search(
+        r'(\d+[,\s]+[\w\s]+(?:STREET|ST|ROAD|RD|AVE|AVENUE|JALAN|JLN|LANE|LN)[^\n]{0,60})',
+        text, re.IGNORECASE
+    )
+    if addr_m:
+        address = addr_m.group(1).strip()
 
     return {
-        "company": tokens[0] if tokens else None,
-        "date": dates[0] if dates else None,
-        "total": totals[-1] if totals else None,
-        "address": None,
-        "company_score": 0.5,
-        "date_score": 0.5,
-        "total_score": 0.7,
-        "address_score": 0.0,
+        "company":       company,
+        "date":          date,
+        "total":         total,
+        "address":       address,
+        "company_score": 0.45 if company  else 0.0,
+        "date_score":    0.50 if date     else 0.0,
+        "total_score":   0.55 if total    else 0.0,
+        "address_score": 0.45 if address  else 0.0,
     }
 
 
 # ── Model inference ───────────────────────────────────────────────────────────
-def run_inference(tokens: list, bboxes: list) -> dict:
+def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -> dict:
     if model is None or tokenizer is None:
         return {
-            "company": "MOCK COMPANY",
-            "date": "01/01/2024",
-            "total": "100.00",
-            "address": "123 Mock Street",
-            "company_score": 0.91,
-            "date_score": 0.88,
-            "total_score": 0.95,
-            "address_score": 0.72,
+            "company": "MOCK COMPANY", "date": "01/01/2024",
+            "total": "100.00",         "address": "123 Mock Street",
+            "company_score": 0.91,     "date_score": 0.88,
+            "total_score": 0.95,       "address_score": 0.72,
         }
 
-    norm_bboxes = [normalize_bbox(b) for b in bboxes]
+    # FIX 2 applied here: use real dimensions
+    norm_bboxes = [normalize_bbox(b, img_width, img_height) for b in bboxes]
 
     encoding = tokenizer(
         tokens,
@@ -221,31 +243,27 @@ def run_inference(tokens: list, bboxes: list) -> dict:
     )
 
     word_ids = encoding.word_ids()
-
     aligned_bboxes = [
         norm_bboxes[wid] if wid is not None else [0, 0, 0, 0]
         for wid in word_ids
     ]
-
     encoding["bbox"] = torch.tensor([aligned_bboxes], dtype=torch.long)
 
     with torch.no_grad():
         outputs = model(**encoding)
 
-    logits = outputs.logits[0]
-    probs = torch.softmax(logits, dim=-1)
-
-    pred_ids = torch.argmax(logits, dim=-1).tolist()
+    logits    = outputs.logits[0]
+    probs     = torch.softmax(logits, dim=-1)
+    pred_ids  = torch.argmax(logits, dim=-1).tolist()
     max_probs = probs.max(dim=-1).values.tolist()
 
-    entities = {f: [] for f in FIELDS}
-    entity_probs = {f: [] for f in FIELDS}
-    seen = set()
+    entities      = {f: [] for f in FIELDS}
+    entity_probs  = {f: [] for f in FIELDS}
+    seen          = set()
 
     for idx, wid in enumerate(word_ids):
         if wid is None or wid in seen:
             continue
-
         seen.add(wid)
 
         label = ID2LABEL.get(pred_ids[idx], "O")
@@ -253,28 +271,46 @@ def run_inference(tokens: list, bboxes: list) -> dict:
             continue
 
         _, etype = label.split("-", 1)
-        key = FIELD_MAP.get(etype)
-
+        key      = FIELD_MAP.get(etype)
         if key:
             entities[key].append(tokens[wid])
             entity_probs[key].append(max_probs[idx])
 
     result = {}
-
     for f in FIELDS:
-        result[f] = " ".join(entities[f]) if entities[f] else None
-        result[f"{f}_score"] = (
-            round(sum(entity_probs[f]) / len(entity_probs[f]), 4)
-            if entity_probs[f] else 0.0
-        )
+        if entities[f]:
+            raw_value = " ".join(entities[f])
+            avg_conf  = sum(entity_probs[f]) / len(entity_probs[f])
 
-    text = " ".join(tokens)
+            # FIX 4: lower threshold — trust model more
+            if avg_conf >= 0.50:
+                result[f]            = raw_value
+                result[f"{f}_score"] = round(avg_conf, 4)
+            else:
+                result[f]            = None
+                result[f"{f}_score"] = round(avg_conf, 4)
+        else:
+            result[f]            = None
+            result[f"{f}_score"] = 0.0
+
+    # Post-process: deduplicate repeated date tokens (e.g. "03/03/2018 03/03/2018")
+    # FIX 5: date dedup
+    if result.get("date"):
+        date_val = result["date"]
+        parts    = date_val.split()
+        seen_p   = []
+        for p in parts:
+            if p not in seen_p:
+                seen_p.append(p)
+        result["date"] = " ".join(seen_p)
+
+    # Fallback only for missing fields
+    fb = fallback_extraction(tokens)
     for f in FIELDS:
-        if result[f] is None or result[f"{f}_score"] < 0.60:
-            fb = fallback_extraction(tokens)
+        if not result[f]:
             if fb.get(f):
-                result[f] = fb[f]
-                result[f"{f}_score"] = fb.get(f"{f}_score", 0.50)
+                result[f]            = fb[f]
+                result[f"{f}_score"] = fb.get(f"{f}_score", 0.0)
 
     if all(result[f] is None for f in FIELDS):
         logger.warning("Empty model output → full fallback used")
@@ -286,10 +322,10 @@ def run_inference(tokens: list, bboxes: list) -> dict:
 # ── Response formatter ────────────────────────────────────────────────────────
 def format_response(invoice_id: str, raw: dict, s3_key: str | None, start: float):
     return {
-        "invoice_id": invoice_id,
-        "s3_key": s3_key,
+        "invoice_id":       invoice_id,
+        "s3_key":           s3_key,
         "extracted_fields": {f: raw.get(f) for f in FIELDS},
-        "confidence_scores": {f: raw.get(f"{f}_score", 0.0) for f in FIELDS},
+        "confidence_scores":{f: raw.get(f"{f}_score", 0.0) for f in FIELDS},
         "processing_time_ms": round((time.time() - start) * 1000, 2),
         "model_mode": "mock" if model is None else "finetuned",
     }
@@ -299,24 +335,18 @@ def format_response(invoice_id: str, raw: dict, s3_key: str | None, start: float
 @app.get("/health")
 def health():
     return {
-        "status": "ok",
+        "status":       "ok",
         "model_loaded": model is not None,
-        "model_path": MODEL_PATH,
+        "model_path":   MODEL_PATH,
     }
 
 
 @app.post("/extract")
 async def extract(file: UploadFile = File(...)):
-    start = time.time()
+    start      = time.time()
     invoice_id = f"INV_{uuid.uuid4().hex[:8].upper()}"
 
-    allowed = {
-        "image/jpeg",
-        "image/png",
-        "image/jpg",
-        "application/pdf",
-    }
-
+    allowed = {"image/jpeg", "image/png", "image/jpg", "application/pdf"}
     if file.content_type not in allowed:
         raise HTTPException(
             status_code=400,
@@ -324,7 +354,7 @@ async def extract(file: UploadFile = File(...)):
         )
 
     file_bytes = await file.read()
-    s3_key = upload_to_s3(file_bytes, file.filename)
+    s3_key     = upload_to_s3(file_bytes, file.filename)
 
     try:
         if file.content_type == "application/pdf":
@@ -332,37 +362,34 @@ async def extract(file: UploadFile = File(...)):
             image = convert_from_bytes(file_bytes)[0]
         else:
             image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid file: {e}")
 
-    tokens, bboxes = extract_tokens_from_image(image)
+    # ✅ FIX: get actual image dimensions from OCR function
+    tokens, bboxes, img_width, img_height = extract_tokens_from_image(image)
 
     if not tokens:
         raise HTTPException(status_code=422, detail="No text detected")
 
-    logger.info(f"[{invoice_id}] OCR tokens: {len(tokens)}")
+    logger.info(f"[{invoice_id}] OCR tokens: {len(tokens)}, size: {img_width}x{img_height}")
 
-    raw = run_inference(tokens, bboxes)
+    raw    = run_inference(tokens, bboxes, img_width, img_height)
     result = format_response(invoice_id, raw, s3_key, start)
 
     logger.info(f"[{invoice_id}] Done in {result['processing_time_ms']} ms")
-
     return result
 
 
 @app.post("/extract-from-s3")
 async def extract_from_s3(s3_key: str):
-    start = time.time()
+    start      = time.time()
     invoice_id = f"INV_{uuid.uuid4().hex[:8].upper()}"
 
     try:
-        s3 = boto3.client("s3", region_name=AWS_REGION)
-        obj = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
-
-        file_bytes = obj["Body"].read()
+        s3           = boto3.client("s3", region_name=AWS_REGION)
+        obj          = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        file_bytes   = obj["Body"].read()
         content_type = obj.get("ContentType", "image/jpeg")
-
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"S3 object not found: {e}")
 
@@ -372,9 +399,7 @@ async def extract_from_s3(s3_key: str):
     else:
         image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
 
-    tokens, bboxes = extract_tokens_from_image(image)
-
-    raw = run_inference(tokens, bboxes)
+    tokens, bboxes, img_width, img_height = extract_tokens_from_image(image)
+    raw    = run_inference(tokens, bboxes, img_width, img_height)
     result = format_response(invoice_id, raw, s3_key, start)
-
     return result

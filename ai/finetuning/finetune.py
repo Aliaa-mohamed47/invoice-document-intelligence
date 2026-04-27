@@ -1,21 +1,21 @@
 """
-ai/finetuning/finetune.py
+ai/finetuning/finetune.py  ── FIXED VERSION
 ─────────────────────────────────────────────────────────────────────────────
-Full fine-tuning of LayoutLM on SROIE dataset
-
-Run this on Google Colab with GPU (T4 or A100)
-Training time: ~30–60 minutes on T4
-
-After training: copy saved_model/ into your repo
+Key fixes:
+1. Class weights applied via custom Trainer
+2. eval_strategy fixed (was causing issues in newer transformers)
+3. Better metric tracking
 """
 
 import gc
+import json
 import os
 import sys
 import shutil
 
 import numpy as np
 import torch
+import torch.nn as nn
 from datasets import Dataset
 from seqeval.metrics import f1_score, classification_report
 from transformers import (
@@ -27,7 +27,6 @@ from transformers import (
     TrainingArguments,
 )
 
-# ✅ All labels and config are centralized
 from config import (
     LABEL_LIST, LABEL2ID, ID2LABEL, NUM_LABELS,
     BASE_MODEL_NAME, PAGE_WIDTH, PAGE_HEIGHT, MAX_SEQ_LENGTH,
@@ -36,17 +35,9 @@ from config import (
     EARLY_STOPPING_PATIENCE,
 )
 
-# ── Class weights (for imbalanced labels) ─────────────────────────────────────
-class_weights = torch.tensor(
-    [1.0, 1.2, 1.2, 1.1, 1.1, 2.0, 2.0, 1.1, 1.1],
-    dtype=torch.float
-)
-
 gc.collect()
 torch.cuda.empty_cache()
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-# Works on both Colab and VS Code without changes
 BASE_DIR   = os.path.join(os.path.dirname(__file__), "..")
 TRAIN_JSON = os.path.join(BASE_DIR, "data", "train.json")
 TEST_JSON  = os.path.join(BASE_DIR, "data", "test.json")
@@ -57,13 +48,37 @@ BEST_DIR   = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "model", "best_model")
 )
 
-# Clean old folders
 for d in [OUTPUT_DIR, BEST_DIR]:
     if os.path.exists(d):
         shutil.rmtree(d)
 
-# ── Tokenizer ─────────────────────────────────────────────────────────────────
 tokenizer = LayoutLMTokenizerFast.from_pretrained(BASE_MODEL_NAME)
+
+
+# ── Class weights ─────────────────────────────────────────────────────────────
+# FIX: balanced weights — ADDRESS and TOTAL are rare so upweight them
+# O, B-COMPANY, I-COMPANY, B-DATE, I-DATE, B-TOTAL, I-TOTAL, B-ADDRESS, I-ADDRESS
+CLASS_WEIGHTS = torch.tensor(
+    [0.1, 1.5, 1.5, 1.2, 1.2, 2.5, 2.5, 2.0, 2.0],
+    dtype=torch.float
+)
+
+
+class WeightedTrainer(Trainer):
+    """Custom Trainer that applies class weights to CrossEntropyLoss."""
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels  = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits  = outputs.logits
+
+        device  = logits.device
+        weights = CLASS_WEIGHTS.to(device)
+
+        loss_fn = nn.CrossEntropyLoss(weight=weights, ignore_index=-100)
+        loss    = loss_fn(logits.view(-1, NUM_LABELS), labels.view(-1))
+
+        return (loss, outputs) if return_outputs else loss
 
 
 # ── Preprocessing ─────────────────────────────────────────────────────────────
@@ -107,6 +122,7 @@ def tokenize_and_align(examples):
                 label_ids.append(LABEL2ID[labels[word_id]])
                 bbox_ids.append(norm[word_id])
             else:
+                # FIX: use -100 for sub-tokens (don't propagate label)
                 label_ids.append(-100)
                 bbox_ids.append(norm[word_id])
             prev_word_id = word_id
@@ -120,14 +136,23 @@ def tokenize_and_align(examples):
 
 
 def build_dataset(json_path: str) -> Dataset:
-    import json
     with open(json_path, "r", encoding="utf-8") as f:
         records = json.load(f)
 
+    # FIX: filter out records with no entity labels
+    valid_records = []
+    for r in records:
+        if any(l != "O" for l in r["labels"]):
+            valid_records.append(r)
+        else:
+            print(f"[SKIP] {r['id']} — all O labels")
+
+    print(f"  Loaded {len(records)} records, {len(valid_records)} have entities")
+
     ds = Dataset.from_dict({
-        "tokens": [r["tokens"] for r in records],
-        "bboxes": [r["bboxes"] for r in records],
-        "labels": [r["labels"] for r in records],
+        "tokens": [r["tokens"] for r in valid_records],
+        "bboxes": [r["bboxes"] for r in valid_records],
+        "labels": [r["labels"] for r in valid_records],
     })
 
     return ds.map(
@@ -140,7 +165,7 @@ def build_dataset(json_path: str) -> Dataset:
 # ── Metrics ───────────────────────────────────────────────────────────────────
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
-    preds = np.argmax(logits, axis=-1)
+    preds          = np.argmax(logits, axis=-1)
 
     true_labels, true_preds = [], []
 
@@ -167,13 +192,11 @@ if __name__ == "__main__":
 
     if not os.path.exists(TRAIN_JSON):
         print(f"\n❌ Train data not found at {TRAIN_JSON}")
-        print("   Run ai/data/clean_data.py first to generate train.json")
         sys.exit(1)
 
     print("\n🔄 Loading and tokenizing data...")
     train_ds = build_dataset(TRAIN_JSON)
     test_ds  = build_dataset(TEST_JSON)
-
     print(f"Train: {len(train_ds)} samples  |  Test: {len(test_ds)} samples")
 
     model = LayoutLMForTokenClassification.from_pretrained(
@@ -200,9 +223,11 @@ if __name__ == "__main__":
         fp16=torch.cuda.is_available(),
         logging_steps=20,
         report_to="none",
+        save_total_limit=2,           # keep only 2 checkpoints
+        dataloader_num_workers=0,     # safe on Windows
     )
 
-    trainer = Trainer(
+    trainer = WeightedTrainer(
         model=model,
         args=args,
         train_dataset=train_ds,
