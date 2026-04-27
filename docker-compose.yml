@@ -1,20 +1,15 @@
-version: "3.9"
-
+# docker-compose.yml
 # ─────────────────────────────────────────────────────────────────────────────
 # Invoice Document Intelligence System
-# Docker Compose
-#
-# علياء:   inference-api  (port 8000)
-# فاطمة:   backend        (port 8080)
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── 1. FastAPI Inference Service (علياء) ──────────────────────────────────
+  # ── 1. FastAPI Inference Service  ──────────────────────────────────
   inference-api:
     build:
-      context: ./inference_api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: inference_api/Dockerfile
     container_name: invoice-inference
     ports:
       - "8000:8000"
@@ -35,7 +30,7 @@ services:
       - invoice-net
     restart: unless-stopped
 
-  # ── 2. FastAPI Backend (فاطمة) ─────────────────────────────────────────────
+  # ── 2. FastAPI Backend ─────────────────────────────────────────────
   backend:
     build:
       context: ./backend

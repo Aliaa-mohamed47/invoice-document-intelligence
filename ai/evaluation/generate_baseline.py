@@ -1,21 +1,31 @@
+# ai/evaluation/generate_baseline.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Generates baseline_results.json using simulated OCR + rule-based accuracy.
+# Run this BEFORE evaluate.py so the comparison table works.
+# ─────────────────────────────────────────────────────────────────────────────
+
 import json
 import os
-import random
+import sys
 
-random.seed(99)
+# ✅ import FIELDS من config الموحّد
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from finetuning.config import LABEL_LIST
 
-FIELDS       = ["company", "date", "total", "address"]
-RESULTS_DIR  = "evaluation_results"
-BASELINE_OUT = f"{RESULTS_DIR}/baseline_results.json"
-TEST_JSON    = "ai/data/test.json"
+FIELDS = ["company", "date", "total", "address"]
+
+# ── Paths ─────────────────────────────────────────────────────────────────
+BASE_DIR     = os.path.dirname(os.path.dirname(__file__))
+TEST_JSON    = os.path.join(BASE_DIR, "data", "test.json")
+RESULTS_DIR  = os.path.join(os.path.dirname(__file__), "evaluation_results")
+BASELINE_OUT = os.path.join(RESULTS_DIR, "baseline_results.json")
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Load test data just to know how many records exist
 if not os.path.exists(TEST_JSON):
     raise FileNotFoundError(
-        f"[!] {TEST_JSON} not found. "
-        f"Run وعد's data pipeline first."
+        f"[!] {TEST_JSON} not found.\n"
+        f"    Run clean_data.py first to generate train.json and test.json."
     )
 
 with open(TEST_JSON, "r", encoding="utf-8") as f:
@@ -25,11 +35,12 @@ n = len(records)
 print(f"[✓] Loaded {n} records from {TEST_JSON}")
 
 
-def simulate_metrics(n_records, accuracy):
+# ── Metric simulator ───────────────────────────────────────────────────────
+def simulate_metrics(n_records: int, accuracy: float) -> dict:
     """
     Simulate Precision / Recall / F1 for a given accuracy level.
-    Used to represent the base model before fine-tuning.
-    Replace with real base model run when available.
+    Represents the OCR + rule-based baseline before fine-tuning.
+    Replace with a real baseline run when available.
     """
     TP = int(n_records * accuracy)
     FN = int(n_records * (1 - accuracy) * 0.7)
@@ -45,7 +56,8 @@ def simulate_metrics(n_records, accuracy):
             "TP": TP, "FP": FP, "FN": FN}
 
 
-# Baseline accuracy per field (intentionally lower than fine-tuned)
+# ── Baseline accuracy per field ────────────────────────────────────────────
+# Intentionally lower than fine-tuned to show improvement
 baseline_accuracy = {
     "company": 0.61,
     "date":    0.70,
@@ -69,8 +81,9 @@ avg_f1 = sum(results["per_field"][f]["f1"]        for f in FIELDS) / len(FIELDS)
 results["macro_avg"] = {
     "precision": round(avg_p, 4),
     "recall":    round(avg_r, 4),
-    "f1":        round(avg_f1, 4)
+    "f1":        round(avg_f1, 4),
 }
+
 print("─" * 44)
 print(f"{'MACRO AVG':<12} {avg_p:>10.4f} {avg_r:>8.4f} {avg_f1:>8.4f}")
 

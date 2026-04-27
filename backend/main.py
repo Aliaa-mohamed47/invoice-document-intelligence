@@ -1,27 +1,27 @@
 # backend/main.py
-# فاطمة — Backend Service
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # Endpoints:
 #   POST   /api/invoices/upload        ← upload + call inference API
 #   GET    /api/invoices               ← list all invoices
-#   GET    /api/invoices/{id}          ← get single invoice
 #   GET    /api/invoices/search        ← search by company
+#   GET    /api/invoices/{id}          ← get single invoice
 #   PUT    /api/invoices/{id}/confirm  ← confirm + edit fields
 #   DELETE /api/invoices/{id}          ← delete invoice
 #   GET    /health                     ← health check
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
-import os
-import httpx
 import logging
+import os
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Query
+import httpx
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from database import engine, get_db, Base
+from database import Base, engine, get_db
 from models import Invoice, InvoiceStatus
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -30,13 +30,14 @@ logger = logging.getLogger("invoice-backend")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 INFERENCE_API_URL = os.getenv("INFERENCE_API_URL", "http://localhost:8000")
+
 # ── Create tables on startup ──────────────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="Invoice Intelligence — Backend",
-    version="1.0.0",
+    title   = "Invoice Intelligence — Backend",
+    version = "1.0.0",
 )
 
 app.add_middleware(
@@ -53,27 +54,6 @@ class ConfirmRequest(BaseModel):
     date:    Optional[str] = None
     total:   Optional[str] = None
     address: Optional[str] = None
-
-
-class InvoiceOut(BaseModel):
-    id:                int
-    invoice_id:        str
-    original_filename: Optional[str]
-    s3_key:            Optional[str]
-    company:           Optional[str]
-    date:              Optional[str]
-    total:             Optional[str]
-    address:           Optional[str]
-    company_score:     Optional[float]
-    date_score:        Optional[float]
-    total_score:       Optional[float]
-    address_score:     Optional[float]
-    processing_time:   Optional[float]
-    status:            str
-    created_at:        Optional[str]
-
-    class Config:
-        from_attributes = True
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -102,13 +82,13 @@ def invoice_to_dict(inv: Invoice) -> dict:
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
     try:
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         db_status = "ok"
     except Exception:
         db_status = "error"
     return {
-        "status": "ok",
-        "database": db_status,
+        "status":        "ok",
+        "database":      db_status,
         "inference_api": INFERENCE_API_URL,
     }
 
@@ -133,7 +113,7 @@ async def upload_invoice(
 
     file_bytes = await file.read()
 
-    # ── Call inference API ───────────────────────────────────────────────────
+    # Call inference API
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -151,9 +131,9 @@ async def upload_invoice(
 
     logger.info(f"Inference result: {result}")
 
-    # ── Save to DB ───────────────────────────────────────────────────────────
-    fields  = result.get("extracted_fields", {})
-    scores  = result.get("confidence_scores", {})
+    # Save to DB
+    fields = result.get("extracted_fields", {})
+    scores = result.get("confidence_scores", {})
 
     invoice = Invoice(
         invoice_id        = result.get("invoice_id"),
@@ -188,8 +168,8 @@ def list_invoices(db: Session = Depends(get_db)):
 
 @app.get("/api/invoices/search")
 def search_invoices(
-    company: str = Query(..., description="Company name to search for"),
-    db: Session  = Depends(get_db),
+    company: str    = Query(..., description="Company name to search for"),
+    db:      Session = Depends(get_db),
 ):
     """Search invoices by company name (case-insensitive partial match)."""
     invoices = (
@@ -215,14 +195,11 @@ def confirm_invoice(
     body: ConfirmRequest,
     db:   Session = Depends(get_db),
 ):
-    """
-    Confirm invoice — optionally update extracted fields before saving.
-    """
+    """Confirm invoice — optionally update extracted fields before saving."""
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    # Apply any user edits from the dashboard
     if body.company is not None: invoice.company = body.company
     if body.date    is not None: invoice.date    = body.date
     if body.total   is not None: invoice.total   = body.total

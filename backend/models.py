@@ -1,7 +1,10 @@
+# backend/models.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+import enum
 from sqlalchemy import Column, Integer, String, Float, DateTime, Enum
 from sqlalchemy.sql import func
 from database import Base
-import enum
 
 
 class InvoiceStatus(str, enum.Enum):

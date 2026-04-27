@@ -1,7 +1,7 @@
 # deployment/aws_config.yml
-# علياء — AWS Setup Guide
+# Aliaa — AWS Deployment Guide
 # ─────────────────────────────────────────────────────────────────────────────
-# اتبعي الخطوات دي بالترتيب عشان ترفعي المشروع على AWS
+# Follow these steps in order to deploy the project on AWS
 # ─────────────────────────────────────────────────────────────────────────────
 
 aws:
@@ -10,81 +10,98 @@ aws:
   # ── S3 Bucket ───────────────────────────────────────────────────────────────
   s3:
     bucket_name: invoice-intelligence-bucket
-    # عملي ده من AWS Console أو بالـ CLI:
+    # Create via AWS Console or CLI:
     # aws s3 mb s3://invoice-intelligence-bucket --region us-east-1
+
 
   # ── EC2 Instance ────────────────────────────────────────────────────────────
   ec2:
-    instance_type: t2.medium     # كافي للموديل
+    instance_type: t2.medium
     ami: ami-0c02fb55956c7d316   # Amazon Linux 2023
-    # free tier: t2.micro (بس الموديل محتاج RAM أكبر)
+    # free tier option: t2.micro (not recommended for model workloads)
+
 
   # ── Security Group Rules ────────────────────────────────────────────────────
   security_group:
     inbound:
-      - port: 22    # SSH
+      - port: 22
         source: your-ip/32
-      - port: 8000  # inference API
-        source: 0.0.0.0/0
-      - port: 8080  # backend
-        source: 0.0.0.0/0
-      - port: 5432  # PostgreSQL (internal only)
-        source: sg-internal
+
+      - port: 8000
+        source: 0.0.0.0/0   # inference API
+
+      - port: 8080
+        source: 0.0.0.0/0   # backend API
+
+      - port: 5432
+        source: sg-internal  # PostgreSQL (internal only)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# خطوات الـ Deployment بالترتيب
+# Deployment Steps (ordered)
 # ─────────────────────────────────────────────────────────────────────────────
 
 steps:
 
   1_create_s3:
     commands:
-      - "aws s3 mb s3://invoice-intelligence-bucket --region us-east-1"
-      - "aws s3api put-bucket-cors --bucket invoice-intelligence-bucket --cors-configuration file://deployment/s3_cors.json"
+      - aws s3 mb s3://invoice-intelligence-bucket --region us-east-1
+      - aws s3api put-bucket-cors --bucket invoice-intelligence-bucket \
+        --cors-configuration file://deployment/s3_cors.json
+
 
   2_launch_ec2:
     commands:
-      - "# افتحي AWS Console > EC2 > Launch Instance"
-      - "# اختاري Amazon Linux 2023 + t2.medium"
-      - "# حطي Security Group فيه port 8000 و 8080"
-      - "# حملي الـ key pair (.pem file)"
+      - "# Go to AWS Console > EC2 > Launch Instance"
+      - "# Select Amazon Linux 2023 + t2.medium"
+      - "# Configure Security Group (ports 8000, 8080)"
+      - "# Download key pair (.pem file)"
+
 
   3_connect_and_setup:
     commands:
-      - "ssh -i your-key.pem ec2-user@<ec2-public-ip>"
-      - "sudo yum update -y"
-      - "sudo yum install -y docker git"
-      - "sudo systemctl start docker"
-      - "sudo usermod -aG docker ec2-user"
-      - "sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose"
-      - "sudo chmod +x /usr/local/bin/docker-compose"
+      - ssh -i your-key.pem ec2-user@<ec2-public-ip>
+      - sudo yum update -y
+      - sudo yum install -y docker git
+      - sudo systemctl start docker
+      - sudo usermod -aG docker ec2-user
+
+      - sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) \
+        -o /usr/local/bin/docker-compose
+
+      - sudo chmod +x /usr/local/bin/docker-compose
+
 
   4_deploy_project:
     commands:
-      - "git clone https://github.com/your-repo/invoice-intelligence.git"
-      - "cd invoice-intelligence"
-      - "cp .env.example .env"
-      - "# عدلي الـ .env بياناتك الحقيقية"
-      - "nano .env"
-      - "docker-compose up -d --build"
+      - git clone https://github.com/your-repo/invoice-intelligence.git
+      - cd invoice-intelligence
+      - cp .env.example .env
+      - "# Edit environment variables"
+      - nano .env
+      - docker-compose up -d --build
+
 
   5_verify:
     commands:
-      - "docker-compose ps"
-      - "curl http://localhost:8000/health"
-      - "curl http://localhost:8080/api/invoices"
+      - docker-compose ps
+      - curl http://localhost:8000/health
+      - curl http://localhost:8080/api/invoices
+
 
   6_cloudwatch_monitoring:
-    description: "AWS CloudWatch لمتابعة الـ logs"
+    description: AWS CloudWatch logging and monitoring setup
     commands:
-      - "# في AWS Console > CloudWatch > Log Groups"
-      - "# هتلاقي logs تلقائياً من الـ containers"
-      - "# ضبطي Alert لو الـ latency > 10 seconds"
-      - "# ضبطي Alert لو الـ error rate > 5%"
+      - "# Go to AWS Console > CloudWatch > Log Groups"
+      - "# Logs will appear automatically from containers"
+      - "# Set alert: latency > 10 seconds"
+      - "# Set alert: error rate > 5%"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# URLs بعد الـ deployment
+# Post-deployment URLs
 # ─────────────────────────────────────────────────────────────────────────────
+
 urls:
   inference_api: "http://<ec2-public-ip>:8000"
   inference_docs: "http://<ec2-public-ip>:8000/docs"

@@ -7,7 +7,7 @@ BEST_MODEL_DIR  = "ai/model/best_model"
 TRAIN_JSON = "ai/data/train.json"
 TEST_JSON  = "ai/data/test.json"
 
-# ── Labels ────────────────────────────────────────────────────────────────────
+
 LABEL_LIST = [
     "O",
     "B-COMPANY", "I-COMPANY",
@@ -15,25 +15,26 @@ LABEL_LIST = [
     "B-TOTAL",   "I-TOTAL",
     "B-ADDRESS", "I-ADDRESS",
 ]
-LABEL2ID = {l: i for i, l in enumerate(LABEL_LIST)}
-ID2LABEL = {i: l for l, i in LABEL2ID.items()}
+LABEL2ID = {label: idx for idx, label in enumerate(LABEL_LIST)}
+ID2LABEL = {idx: label for label, idx in LABEL2ID.items()}
+NUM_LABELS = len(LABEL_LIST)
 
 # ── Training ──────────────────────────────────────────────────────────────────
-NUM_TRAIN_EPOCHS          = 15
-PER_DEVICE_TRAIN_BATCH    = 16
-PER_DEVICE_EVAL_BATCH     = 16
-LEARNING_RATE             = 5e-5
-WARMUP_RATIO              = 0.1
-WEIGHT_DECAY              = 0.01
-LR_SCHEDULER              = "cosine"
-EARLY_STOPPING_PATIENCE   = 5
-MAX_SEQ_LENGTH            = 512
+NUM_TRAIN_EPOCHS        = 15
+PER_DEVICE_TRAIN_BATCH  = 16
+PER_DEVICE_EVAL_BATCH   = 16
+LEARNING_RATE           = 3e-5
+WARMUP_STEPS            = 100
+WEIGHT_DECAY            = 0.01
+LR_SCHEDULER            = "cosine"
+EARLY_STOPPING_PATIENCE = 5
+MAX_SEQ_LENGTH          = 512
 
-# ── LoRA ──────────────────────────────────────────────────────────────────────
-LORA_R          = 8       # rank — جربي 16 كـ stretch experiment
-LORA_ALPHA      = 16
-LORA_DROPOUT    = 0.1
-LORA_TARGET     = ["query", "value"]
+# ── LoRA (stretch experiment) ─────────────────────────────────────────────────
+LORA_R       = 8        
+LORA_ALPHA   = 16
+LORA_DROPOUT = 0.1
+LORA_TARGET  = ["query", "value"]
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 PAGE_WIDTH  = 762

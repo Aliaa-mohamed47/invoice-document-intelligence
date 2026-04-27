@@ -1,6 +1,6 @@
 """
-preprocess.py
--------------
+ai/data/preprocess.py
+─────────────────────
 Extracts OCR tokens AND bounding boxes from SROIE box-file lines.
 
 Each raw line format:
@@ -13,16 +13,17 @@ Output per record:
     { "id": str, "tokens": [str], "bboxes": [[x0,y0,x1,y1], ...], "entities": dict }
 """
 
+import os
 from collect_data import load_split
 
 
-def parse_box_line(line: str) -> tuple[str, list[int]] | tuple[None, None]:
+def parse_box_line(line: str) -> tuple[str | None, list[int] | None]:
     """
     Extract (text, bbox) from one box-file line.
     bbox is [x_min, y_min, x_max, y_max] derived from the 8 coordinate values.
     Returns (None, None) if the line is malformed.
     """
-    parts = line.split(",", maxsplit=8)   # split on first 8 commas only
+    parts = line.split(",", maxsplit=8)    # split on first 8 commas only
     if len(parts) < 9:
         return None, None
 
@@ -35,15 +36,17 @@ def parse_box_line(line: str) -> tuple[str, list[int]] | tuple[None, None]:
     if not text:
         return None, None
 
-    # Derive axis-aligned bbox from four corner points
-    xs = [coords[0], coords[2], coords[4], coords[6]]
-    ys = [coords[1], coords[3], coords[5], coords[7]]
-    bbox = [min(xs), min(ys), max(xs), max(ys)]   # [x_min, y_min, x_max, y_max]
+    # Axis-aligned bbox from four corner points
+    xs   = [coords[0], coords[2], coords[4], coords[6]]
+    ys   = [coords[1], coords[3], coords[5], coords[7]]
+    bbox = [min(xs), min(ys), max(xs), max(ys)]
 
     return text, bbox
 
 
-def extract_tokens_and_bboxes(box_lines: list[str]) -> tuple[list[str], list[list[int]]]:
+def extract_tokens_and_bboxes(
+    box_lines: list[str],
+) -> tuple[list[str], list[list[int]]]:
     """
     Convert a list of raw box lines into:
         - a flat list of word tokens
@@ -51,7 +54,7 @@ def extract_tokens_and_bboxes(box_lines: list[str]) -> tuple[list[str], list[lis
 
     Multi-word text segments on the same line share the same bbox.
     """
-    tokens: list[str] = []
+    tokens: list[str]       = []
     bboxes: list[list[int]] = []
 
     for line in box_lines:
@@ -68,24 +71,29 @@ def extract_tokens_and_bboxes(box_lines: list[str]) -> tuple[list[str], list[lis
 def preprocess_split(split_dir: str) -> list[dict]:
     """Load + preprocess one dataset split."""
     raw_records = load_split(split_dir)
-    processed = []
+    processed   = []
+
     for r in raw_records:
         tokens, bboxes = extract_tokens_and_bboxes(r["box_lines"])
         if not tokens:
-            print(f"[WARN] empty token list for {r['id']}, skipping")
+            print(f"[WARN] empty token list for {r['id']} — skipping")
             continue
         processed.append({
             "id":       r["id"],
             "tokens":   tokens,
-            "bboxes":   bboxes,    # ← NEW: required by model.py / pipeline.py
+            "bboxes":   bboxes,
             "entities": r["entities"],
         })
+
     return processed
 
 
+# ── Quick sanity check ─────────────────────────────────────────────────────
 if __name__ == "__main__":
-    train = preprocess_split("SROIE2019/train")
-    test  = preprocess_split("SROIE2019/test")
+    base = os.environ.get("DATASET_DIR", "SROIE2019")
+
+    train = preprocess_split(os.path.join(base, "train"))
+    test  = preprocess_split(os.path.join(base, "test"))
 
     if train:
         r = train[0]
@@ -93,3 +101,5 @@ if __name__ == "__main__":
         print(f"tokens  : {r['tokens'][:10]}")
         print(f"bboxes  : {r['bboxes'][:3]}")
         print(f"entities: {r['entities']}")
+
+    print(f"\nTrain: {len(train)} samples  |  Test: {len(test)} samples")
