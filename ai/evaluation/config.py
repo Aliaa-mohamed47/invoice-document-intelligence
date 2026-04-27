@@ -21,10 +21,10 @@ BASELINE_OUTPUT  = f"{RESULTS_DIR}/baseline_results.json"
 # ── Labels (must match finetune.py exactly) ──────────────────────────────────
 LABEL_LIST = [
     "O",
-    "B-ADDRESS", "I-ADDRESS",
     "B-COMPANY", "I-COMPANY",
     "B-DATE",    "I-DATE",
     "B-TOTAL",   "I-TOTAL",
+    "B-ADDRESS", "I-ADDRESS",
 ]
 
 LABEL2ID = {l: i for i, l in enumerate(LABEL_LIST)}
