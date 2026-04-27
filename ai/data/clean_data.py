@@ -16,42 +16,50 @@ BIO scheme:
     B-ADDRESS / I-ADDRESS
     O  (outside)
 """
-
 import json
 import re
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
 from preprocess import preprocess_split
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def normalize(text: str) -> str:
-    """Lower-case and collapse whitespace for fuzzy matching."""
     return re.sub(r"\s+", " ", text.lower().strip())
 
 
-def tokenize_entity(entity_value: str) -> list[str]:
-    """Split an entity string into individual tokens (same logic as OCR tokens)."""
+def tokenize_entity(entity_value: str) -> list:
     return entity_value.split()
 
 
-def find_span(tokens: list[str], entity_tokens: list[str]) -> int | None:
-    """
-    Return the start index of the first occurrence of `entity_tokens`
-    inside `tokens` (case-insensitive).  Returns None if not found.
-    """
+def find_span(tokens: list, entity_tokens: list):
+
     n, m = len(tokens), len(entity_tokens)
-    norm_tokens  = [normalize(t) for t in tokens]
-    norm_entity  = [normalize(t) for t in entity_tokens]
+    norm_tokens = [normalize(t) for t in tokens]
+    norm_entity = [normalize(t) for t in entity_tokens]
 
     for i in range(n - m + 1):
-        if norm_tokens[i : i + m] == norm_entity:
-            return i
-    return None
+        if norm_tokens[i: i + m] == norm_entity:
+            return i, m
+
+    best_start, best_len = None, 0
+    for i in range(n):
+        match_len = 0
+        for j, et in enumerate(norm_entity):
+            if i + j < n and norm_tokens[i + j] == et:
+                match_len += 1
+            else:
+                break
+        if match_len > len(norm_entity) // 2 and match_len > best_len:
+            best_start, best_len = i, match_len
+
+    if best_start is not None:
+        return best_start, best_len
+
+    return None, 0
 
 
-# ── BIO tagger ────────────────────────────────────────────────────────────────
-
-# Priority order when spans overlap (higher = wins)
 ENTITY_PRIORITY = {"company": 4, "address": 3, "date": 2, "total": 1}
 LABEL_MAP = {
     "company": "COMPANY",
@@ -61,18 +69,9 @@ LABEL_MAP = {
 }
 
 
-def bio_tag(tokens: list[str], entities: dict) -> list[str]:
-    """
-    Produce a BIO label for every token.
-
-    Strategy:
-        1. Find the token span for each entity value.
-        2. In case of overlap, higher-priority entity wins.
-        3. Assign B- / I- / O labels.
-    """
+def bio_tag(tokens: list, entities: dict) -> list:
     n = len(tokens)
-    # label_priority[i] = (priority, label_prefix) for position i
-    label_priority: list[tuple[int, str] | None] = [None] * n
+    label_priority = [None] * n
 
     for entity_key, label_str in LABEL_MAP.items():
         raw_value = entities.get(entity_key, "").strip()
@@ -80,14 +79,13 @@ def bio_tag(tokens: list[str], entities: dict) -> list[str]:
             continue
 
         entity_tokens = tokenize_entity(raw_value)
-        start = find_span(tokens, entity_tokens)
+        start, span_len = find_span(tokens, entity_tokens)
         if start is None:
-            # Try harder: sometimes only a substring matches
-            # Fall back: skip silently (keeps O labels for those tokens)
             continue
 
         prio = ENTITY_PRIORITY.get(entity_key, 0)
-        for offset, pos in enumerate(range(start, start + len(entity_tokens))):
+        for offset in range(span_len):
+            pos = start + offset
             if pos >= n:
                 break
             existing = label_priority[pos]
@@ -98,44 +96,57 @@ def bio_tag(tokens: list[str], entities: dict) -> list[str]:
     return [lp[1] if lp else "O" for lp in label_priority]
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
-
-def clean_split(split_dir: str) -> list[dict]:
-    """Preprocess + BIO-tag an entire dataset split."""
+def clean_split(split_dir: str) -> list:
     preprocessed = preprocess_split(split_dir)
     cleaned = []
+
     for r in preprocessed:
         labels = bio_tag(r["tokens"], r["entities"])
-        assert len(labels) == len(r["tokens"]), "label/token length mismatch"
+        assert len(labels) == len(r["tokens"]), \
+            f"label/token mismatch in {r['id']}"
+
+        non_o = [l for l in labels if l != "O"]
+        if not non_o:
+            print(f"[WARN] No entities found in {r['id']} — check entity alignment")
+
         cleaned.append({
             "id":     r["id"],
             "tokens": r["tokens"],
+            "bboxes": r["bboxes"],
             "labels": labels,
         })
+
     return cleaned
 
 
 if __name__ == "__main__":
-    train = clean_split(r"D:\invoice-document-intelligence\Dataset\train")
-    test  = clean_split(r"D:\invoice-document-intelligence\Dataset\test")
+    base = os.path.join(os.path.dirname(__file__), "..", "..", "Dataset")
+    out  = os.path.dirname(__file__)
 
-    with open("train.json", "w", encoding="utf-8") as f:
+    train = clean_split(os.path.join(base, "train"))
+    test  = clean_split(os.path.join(base, "test"))
+
+    train_path = os.path.join(out, "train.json")
+    test_path  = os.path.join(out, "test.json")
+
+    with open(train_path, "w", encoding="utf-8") as f:
         json.dump(train, f, ensure_ascii=False, indent=2)
 
-    with open("test.json", "w", encoding="utf-8") as f:
+    with open(test_path, "w", encoding="utf-8") as f:
         json.dump(test, f, ensure_ascii=False, indent=2)
 
-    print("✅ Data saved as train.json and test.json")
-    
-    if train:
-        r = train[0]
-        print(f"\nid      : {r['id']}")
-        for tok, lbl in zip(r["tokens"][:20], r["labels"][:20]):
-            print(f"  {tok:<20} {lbl}")
+    print(f"✅ Saved {len(train)} train records → {train_path}")
+    print(f"✅ Saved {len(test)} test records  → {test_path}")
 
-    # Label distribution
     from collections import Counter
     all_labels = [l for r in train for l in r["labels"]]
     print("\nLabel distribution (train):")
     for lbl, cnt in Counter(all_labels).most_common():
         print(f"  {lbl:<15} {cnt}")
+
+    total = len(all_labels)
+    o_count = all_labels.count("O")
+    o_ratio = o_count / total * 100
+    print(f"\n  O ratio: {o_ratio:.1f}%")
+    if o_ratio > 95:
+        print("  ⚠️  WARNING: O ratio > 95% — entity alignment might be failing!")

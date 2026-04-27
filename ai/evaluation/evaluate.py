@@ -6,10 +6,12 @@ from tqdm import tqdm
 from results_to_json import format_output
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-# ── CONFIG ───────────────────────────────────────────────────────────────────
-USE_MOCK      = True
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+# ❌ كان: USE_MOCK = True  ← ده بيخلي الـ evaluation مش حقيقي خالص
+USE_MOCK      = False  # ✅ غيّرناه لـ False عشان نقيّم الموديل الحقيقي
 
-TEST_JSON     = "ai/data/test.json"
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+TEST_JSON = os.path.join(BASE_DIR, "data", "test.json")
 RESULTS_DIR   = "evaluation_results"
 FINETUNED_OUT = f"{RESULTS_DIR}/finetuned_results.json"
 BASELINE_OUT  = f"{RESULTS_DIR}/baseline_results.json"
@@ -17,7 +19,6 @@ FIELDS        = ["company", "date", "total", "address"]
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# ── LABEL DEFINITIONS (must match finetune.py exactly) ───────────────────────
 LABEL_LIST = [
     "O",
     "B-ADDRESS", "I-ADDRESS",
@@ -29,22 +30,16 @@ LABEL2ID = {l: i for i, l in enumerate(LABEL_LIST)}
 ID2LABEL = {i: l for l, i in LABEL2ID.items()}
 
 
-# ── LOAD TEST DATA ───────────────────────────────────────────────────────────
 def load_test_data():
     if not os.path.exists(TEST_JSON):
-        raise FileNotFoundError(
-            f"[!] {TEST_JSON} not found. "
-            f"Make sure وعد's data pipeline has been run first."
-        )
+        raise FileNotFoundError(f"[!] {TEST_JSON} not found.")
     with open(TEST_JSON, "r", encoding="utf-8") as f:
         data = json.load(f)
     print(f"[✓] Loaded {len(data)} test records from {TEST_JSON}")
     return data
 
 
-# ── EXTRACT GROUND TRUTH FROM BIO LABELS ────────────────────────────────────
 def extract_entity_from_bio(tokens, labels, entity_type):
-    """Reconstruct entity text from BIO-tagged tokens."""
     words = []
     for token, label in zip(tokens, labels):
         if label == f"B-{entity_type}":
@@ -55,7 +50,6 @@ def extract_entity_from_bio(tokens, labels, entity_type):
 
 
 def get_ground_truth(record):
-    """Extract all 4 fields from a record's BIO labels."""
     tokens = record["tokens"]
     labels = record["labels"]
     return {
@@ -66,7 +60,6 @@ def get_ground_truth(record):
     }
 
 
-# ── LOAD REAL MODEL ──────────────────────────────────────────────────────────
 def load_model(model_path):
     print(f"[→] Loading model from {model_path} ...")
     tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -76,8 +69,12 @@ def load_model(model_path):
     return model, tokenizer
 
 
-# ── REAL PREDICTION ──────────────────────────────────────────────────────────
-def real_predict(tokens, model, tokenizer):
+def real_predict(tokens, bboxes, model, tokenizer):
+    """
+    ✅ التعديل الرئيسي: بنبعت الـ bboxes مع الـ tokens
+    لأن LayoutLM محتاجهم للـ spatial understanding.
+    لو الموديل مش LayoutLM، الـ bboxes بتتتجاهل تلقائياً.
+    """
     import torch
 
     encoding = tokenizer(
@@ -89,6 +86,16 @@ def real_predict(tokens, model, tokenizer):
         padding="max_length",
     )
 
+    # ✅ لو LayoutLM: ابعت الـ bboxes
+    if bboxes is not None:
+        word_ids = encoding.word_ids()
+        norm_bboxes = [normalize_bbox(b) for b in bboxes]
+        bbox_tensor = [
+            norm_bboxes[wid] if wid is not None else [0, 0, 0, 0]
+            for wid in word_ids
+        ]
+        encoding["bbox"] = torch.tensor([bbox_tensor], dtype=torch.long)
+
     with torch.no_grad():
         outputs = model(**encoding)
 
@@ -97,8 +104,10 @@ def real_predict(tokens, model, tokenizer):
     pred_ids  = torch.argmax(logits, dim=-1).tolist()
     max_probs = probs.max(dim=-1).values.tolist()
 
-    field_map = {"COMPANY": "company", "DATE": "date",
-                "TOTAL": "total", "ADDRESS": "address"}
+    field_map = {
+        "COMPANY": "company", "DATE": "date",
+        "TOTAL": "total", "ADDRESS": "address"
+    }
     entities     = {f: [] for f in FIELDS}
     entity_probs = {f: [] for f in FIELDS}
 
@@ -126,19 +135,17 @@ def real_predict(tokens, model, tokenizer):
     return output
 
 
-# ── MOCK PREDICTION (used while USE_MOCK = True) ─────────────────────────────
-def mock_predict(tokens, ground_truth):
-    """Simulates ~85% accuracy. Replace with real model when ready."""
-    import random
-    output = {}
-    for f in FIELDS:
-        gt_val = ground_truth.get(f)
-        output[f] = gt_val if (gt_val and random.random() > 0.15) else None
-        output[f"{f}_score"] = round(random.uniform(0.65, 0.98), 4)
-    return output
+def normalize_bbox(bbox, width=762, height=1000):
+    """✅ تضاف هنا عشان تتعامل مع صور بأبعاد مختلفة."""
+    x0, y0, x1, y1 = bbox
+    return [
+        max(0, min(int(1000 * x0 / width),  1000)),
+        max(0, min(int(1000 * y0 / height), 1000)),
+        max(0, min(int(1000 * x1 / width),  1000)),
+        max(0, min(int(1000 * y1 / height), 1000)),
+    ]
 
 
-# ── METRICS ──────────────────────────────────────────────────────────────────
 def normalize(text):
     if not isinstance(text, str) or not text:
         return ""
@@ -167,7 +174,7 @@ def compute_metrics(ground_truths, predictions):
     precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
     recall    = TP / (TP + FN) if (TP + FN) > 0 else 0.0
     f1 = ((2 * precision * recall) / (precision + recall)
-        if (precision + recall) > 0 else 0.0)
+          if (precision + recall) > 0 else 0.0)
 
     return {
         "precision": round(precision, 4),
@@ -177,19 +184,17 @@ def compute_metrics(ground_truths, predictions):
     }
 
 
-# ── RUN EVALUATION ────────────────────────────────────────────────────────────
 def run_evaluation(records, output_path, model=None, tokenizer=None):
     all_predictions = []
 
     print(f"\n[→] Evaluating {len(records)} records ...")
     for record in tqdm(records):
         ground_truth = get_ground_truth(record)
-        start = time.time()
+        start        = time.time()
 
-        if USE_MOCK or model is None:
-            raw_pred = mock_predict(record["tokens"], ground_truth)
-        else:
-            raw_pred = real_predict(record["tokens"], model, tokenizer)
+        # ✅ بنبعت الـ bboxes للموديل لو موجودة في الـ record
+        bboxes = record.get("bboxes", None)
+        raw_pred = real_predict(record["tokens"], bboxes, model, tokenizer)
 
         formatted = format_output(record["id"], raw_pred, start)
         formatted["ground_truth"] = ground_truth
@@ -224,7 +229,6 @@ def run_evaluation(records, output_path, model=None, tokenizer=None):
     return results
 
 
-# ── COMPARE BASELINE VS FINE-TUNED ───────────────────────────────────────────
 def compare():
     if not os.path.exists(BASELINE_OUT):
         print("[!] baseline_results.json not found — skipping comparison")
@@ -239,30 +243,24 @@ def compare():
         bf = b["per_field"][field]["f1"]
         ff = f["per_field"][field]["f1"]
         print(f"{field:<12} {bf:>9.4f} {ff:>9.4f} {ff-bf:>+9.4f} "
-            f"{'✓' if ff > bf else '✗':>10}")
+              f"{'✓' if ff > bf else '✗':>10}")
     print("─" * 54)
     bm = b["macro_avg"]["f1"]
     fm = f["macro_avg"]["f1"]
     print(f"{'MACRO AVG':<12} {bm:>9.4f} {fm:>9.4f} {fm-bm:>+9.4f}")
 
 
-# ── MAIN ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import random
-    random.seed(42)
-
     records = load_test_data()
 
-    if not USE_MOCK:
-        MODEL_PATH = (
-            "/content/invoice-document-intelligence/ai/model/saved_model"
-            if os.path.exists("/content/invoice-document-intelligence/ai/model/saved_model")
-            else "ai/model/saved_model"
-        )
-        model, tokenizer = load_model(MODEL_PATH)
-    else:
-        print("[!] USE_MOCK=True — using simulated predictions for testing")
-        model, tokenizer = None, None
+    BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+
+    MODEL_PATH = (
+        "/content/invoice-document-intelligence/ai/model/saved_model"
+        if os.path.exists("/content/invoice-document-intelligence/ai/model/saved_model")
+        else os.path.join(BASE_DIR, "model", "saved_model")
+    )
+    model, tokenizer = load_model(MODEL_PATH)
 
     print("\n=== Fine-tuned Model Evaluation ===")
     run_evaluation(records, FINETUNED_OUT, model, tokenizer)
