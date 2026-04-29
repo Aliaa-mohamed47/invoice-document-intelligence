@@ -215,7 +215,7 @@ if __name__ == "__main__":
         warmup_steps=WARMUP_STEPS,
         weight_decay=WEIGHT_DECAY,
         lr_scheduler_type=LR_SCHEDULER,
-        eval_strategy="epoch",
+        evaluation_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="f1",
