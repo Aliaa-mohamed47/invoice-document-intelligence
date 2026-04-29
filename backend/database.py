@@ -1,27 +1,38 @@
+import boto3
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from botocore.exceptions import ClientError
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./invoicedb.db")
+# إعدادات AWS من متغيرات البيئة
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+TABLE_NAME = os.getenv("DYNAMO_TABLE_NAME", "InvoicesTable")
 
-engine = create_engine(
-    DATABASE_URL,
-    **({'connect_args': {'check_same_thread': False}} if 'sqlite' in DATABASE_URL else {})
-)
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+# الاتصال بـ DynamoDB
+dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+table = dynamodb.Table(TABLE_NAME)
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base = declarative_base()
-
-
-def get_db():
-    db = SessionLocal()
+def save_invoice_to_db(data: dict):
+    """حفظ بيانات الفاتورة في DynamoDB"""
     try:
-        yield db
-    finally:
-        db.close()
+        table.put_item(Item=data)
+        return True
+    except ClientError as e:
+        print(f"Error saving to DynamoDB: {e.response['Error']['Message']}")
+        return False
+
+def get_all_invoices_from_db():
+    """جلب كل الفواتير من الجدول"""
+    try:
+        response = table.scan()
+        return response.get('Items', [])
+    except ClientError as e:
+        print(f"Error fetching from DynamoDB: {e.response['Error']['Message']}")
+        return []
+
+def get_invoice_by_id(invoice_id: str):
+    """جلب فاتورة محددة"""
+    try:
+        response = table.get_item(Key={'id': invoice_id})
+        return response.get('Item')
+    except ClientError as e:
+        print(f"Error fetching item: {e.response['Error']['Message']}")
+        return None

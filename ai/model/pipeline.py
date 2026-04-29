@@ -1,4 +1,4 @@
-# ai/model/pipeline.py  ── FIXED VERSION
+# ai/model/pipeline.py
 # ─────────────────────────────────────────────────────────────────────────────
 
 import json
@@ -8,13 +8,15 @@ import sys
 import torch
 from transformers import AutoTokenizer, LayoutLMForTokenClassification
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Ensure imports work regardless of execution directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from finetuning.config import (
     LABEL_LIST, LABEL2ID, ID2LABEL,
-    PAGE_WIDTH, PAGE_HEIGHT, MAX_SEQ_LENGTH,
+    MAX_SEQ_LENGTH,
 )
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "saved_model")
+# AWS Ready: Allow overriding model path via environment variables
+MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join(os.path.dirname(__file__), "saved_model"))
 FIELDS     = ["company", "date", "total", "address"]
 FIELD_MAP  = {
     "COMPANY": "company",
@@ -25,7 +27,7 @@ FIELD_MAP  = {
 
 
 def normalize_bbox(bbox, width, height):
-    """Always use actual image dimensions."""
+    """Normalize bounding box coordinates to 0-1000 scale based on actual image dimensions."""
     x0, y0, x1, y1 = bbox
     return [
         max(0, min(int(1000 * x0 / width),  1000)),
@@ -36,49 +38,18 @@ def normalize_bbox(bbox, width, height):
 
 
 def load_model(model_path=MODEL_PATH):
+    """Load tokenizer and model from the specified directory."""
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model directory not found at: {model_path}")
+
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model     = LayoutLMForTokenClassification.from_pretrained(model_path)
     model.eval()
     return model, tokenizer
 
 
-def predict(tokens, bboxes, model, tokenizer, img_width, img_height):
-    norm = [normalize_bbox(b, img_width, img_height) for b in bboxes]
-
-    encoding = tokenizer(
-        tokens,
-        is_split_into_words=True,
-        return_tensors="pt",
-        truncation=True,
-        max_length=MAX_SEQ_LENGTH,
-        padding="max_length",
-    )
-
-    word_ids    = encoding.word_ids()
-    bbox_tensor = [norm[wid] if wid is not None else [0, 0, 0, 0] for wid in word_ids]
-    encoding["bbox"] = torch.tensor([bbox_tensor], dtype=torch.long)
-
-    with torch.no_grad():
-        outputs = model(**encoding)
-
-    preds   = torch.argmax(outputs.logits, dim=-1)[0].tolist()
-    results = []
-    seen    = set()
-
-    for idx, wid in enumerate(word_ids):
-        if wid is None or wid in seen:
-            continue
-        seen.add(wid)
-        results.append({
-            "token": tokens[wid],
-            "label": ID2LABEL[preds[idx]],
-            "bbox":  bboxes[wid],
-        })
-
-    return results
-
-
 def regex_fallback(field: str, tokens: list[str]) -> str | None:
+    """Apply rule-based extraction if model confidence is low."""
     text = " ".join(tokens)
     patterns = {
         "date":    r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})\b',
@@ -89,20 +60,20 @@ def regex_fallback(field: str, tokens: list[str]) -> str | None:
     pat = patterns.get(field)
     if not pat:
         return None
+
     m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
     return m.group(1).strip() if m else None
 
 
 def extract_entities(tokens, bboxes, model, tokenizer,
                      img_width, img_height,
-                     confidence_threshold=0.50):   # FIX: lowered from 0.70
+                     confidence_threshold=0.50):
     """
-    Returns structured fields with confidence scores.
+    Extracts entities by grouping contiguous B- and I- tags, scoring them,
+    and returning the highest confidence match per field.
     """
-    buckets      = {f: [] for f in FIELDS}
-    conf_buckets = {f: [] for f in FIELDS}
+    norm_bboxes = [normalize_bbox(b, img_width, img_height) for b in bboxes]
 
-    norm = [normalize_bbox(b, img_width, img_height) for b in bboxes]
     encoding = tokenizer(
         tokens,
         is_split_into_words=True,
@@ -111,79 +82,95 @@ def extract_entities(tokens, bboxes, model, tokenizer,
         max_length=MAX_SEQ_LENGTH,
         padding="max_length",
     )
+
     word_ids    = encoding.word_ids()
-    bbox_tensor = [norm[wid] if wid is not None else [0, 0, 0, 0] for wid in word_ids]
+    bbox_tensor = [norm_bboxes[wid] if wid is not None else [0, 0, 0, 0] for wid in word_ids]
     encoding["bbox"] = torch.tensor([bbox_tensor], dtype=torch.long)
 
     with torch.no_grad():
         outputs = model(**encoding)
 
     probs = torch.softmax(outputs.logits, dim=-1)[0]
-    seen  = set()
+    preds = torch.argmax(probs, dim=-1).tolist()
+
+    # 1. Group contiguous spans
+    extracted_spans = {f: [] for f in FIELDS}
+    current_span = None
+    seen_word_ids = set()
 
     for idx, wid in enumerate(word_ids):
-        if wid is None or wid in seen:
+        if wid is None or wid in seen_word_ids:
             continue
-        seen.add(wid)
 
-        label = ID2LABEL[torch.argmax(probs[idx]).item()]
+        seen_word_ids.add(wid)
+        label = ID2LABEL[preds[idx]]
         conf  = probs[idx].max().item()
 
-        if label == "O":
-            continue
+        if label.startswith("B-"):
+            if current_span:
+                extracted_spans[current_span["field"]].append(current_span)
 
-        parts = label.split("-")
-        if len(parts) < 2:
-            continue
+            field_key = FIELD_MAP.get(label.split("-")[1])
+            if field_key:
+                current_span = {"field": field_key, "tokens": [tokens[wid]], "confidences": [conf]}
+            else:
+                current_span = None
 
-        key = FIELD_MAP.get(parts[1])
-        if key:
-            buckets[key].append(tokens[wid])
-            conf_buckets[key].append(conf)
+        elif label.startswith("I-") and current_span:
+            field_key = FIELD_MAP.get(label.split("-")[1])
+            if field_key == current_span["field"]:
+                current_span["tokens"].append(tokens[wid])
+                current_span["confidences"].append(conf)
+            else:
+                extracted_spans[current_span["field"]].append(current_span)
+                current_span = None
+        else:
+            if current_span:
+                extracted_spans[current_span["field"]].append(current_span)
+                current_span = None
 
-    result = {}
+    if current_span:
+        extracted_spans[current_span["field"]].append(current_span)
+
+    # 2. Select best span per field or fallback to regex
+    final_result = {}
     for field in FIELDS:
-        if buckets[field]:
-            avg_conf = sum(conf_buckets[field]) / len(conf_buckets[field])
-            value    = " ".join(buckets[field])
+        candidates = extracted_spans[field]
+        best_value = None
+        best_conf = 0.0
 
-            # FIX: deduplicate repeated tokens (date bug)
-            parts_dedup = []
-            for p in value.split():
-                if p not in parts_dedup:
-                    parts_dedup.append(p)
-            value = " ".join(parts_dedup)
+        if candidates:
+            # Score spans by average confidence
+            for span in candidates:
+                avg_conf = sum(span["confidences"]) / len(span["confidences"])
+                if avg_conf > best_conf:
+                    best_conf = avg_conf
+                    best_value = " ".join(span["tokens"])
 
-            if avg_conf < confidence_threshold:
-                fallback = regex_fallback(field, tokens)
-                if fallback:
-                    value    = fallback
-                    avg_conf = 0.50
-
-            result[field] = {"value": value, "confidence": round(avg_conf, 2)}
+        if best_value and best_conf >= confidence_threshold:
+            final_result[field] = {"value": best_value, "confidence": round(best_conf, 2)}
         else:
             fallback = regex_fallback(field, tokens)
-            result[field] = {
-                "value":      fallback,
+            final_result[field] = {
+                "value": fallback,
                 "confidence": 0.45 if fallback else 0.0,
             }
 
-    return result
+    return final_result
 
 
 if __name__ == "__main__":
-    tokens = ["KEDAI", "GUNTING", "Date:", "01/01/2023", "Total:", "25.00"]
-    bboxes = [
+    # Local dry-run testing
+    test_tokens = ["KEDAI", "GUNTING", "Date:", "01/01/2023", "Total:", "25.00"]
+    test_bboxes = [
         [100, 100, 200, 120], [210, 100, 300, 120],
         [100, 200, 150, 220], [160, 200, 250, 220],
         [100, 300, 150, 320], [160, 300, 220, 320],
     ]
-    img_width, img_height = 1200, 1600
 
-    if os.path.exists(MODEL_PATH):
-        model, tokenizer = load_model()
-        result = extract_entities(tokens, bboxes, model, tokenizer, img_width, img_height)
-        print("\n--- Inference Result ---")
-        print(json.dumps(result, indent=2))
-    else:
-        print(f"Model not found at {MODEL_PATH}")
+    try:
+        loaded_model, loaded_tokenizer = load_model()
+        res = extract_entities(test_tokens, test_bboxes, loaded_model, loaded_tokenizer, 1200, 1600)
+        print(json.dumps(res, indent=2))
+    except FileNotFoundError as e:
+        print(e)

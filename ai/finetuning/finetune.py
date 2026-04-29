@@ -232,7 +232,6 @@ if __name__ == "__main__":
         args=args,
         train_dataset=train_ds,
         eval_dataset=test_ds,
-        processing_class=tokenizer,
         data_collator=DataCollatorForTokenClassification(
             tokenizer, pad_to_multiple_of=8
         ),

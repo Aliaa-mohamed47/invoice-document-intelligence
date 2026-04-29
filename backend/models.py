@@ -1,16 +1,12 @@
 # backend/models.py
-# ─────────────────────────────────────────────────────────────────────────────
-
 import enum
 from sqlalchemy import Column, Integer, String, Float, DateTime, Enum
 from sqlalchemy.sql import func
 from database import Base
 
-
 class InvoiceStatus(str, enum.Enum):
     PENDING   = "PENDING"
     CONFIRMED = "CONFIRMED"
-
 
 class Invoice(Base):
     __tablename__ = "invoices"
