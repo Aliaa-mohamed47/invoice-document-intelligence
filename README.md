@@ -63,6 +63,12 @@ Upload an invoice file (image/PDF)
   }
 }
 ```
+
+## How to run the Dashboard
+1. Download the repo
+2. Open `ai/Dashboard/dashboard.html` in any browser
+3. That's it! Backend is hosted on AWS
+
 ---
 
 ## 👩‍💻 Team
