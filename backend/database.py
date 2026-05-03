@@ -36,3 +36,11 @@ def get_invoice_by_id(invoice_id: str):
     except ClientError as e:
         print(f"Error fetching item: {e.response['Error']['Message']}")
         return None
+
+def delete_invoice_from_db(invoice_id: str):
+    try:
+        table.delete_item(Key={'id': invoice_id})
+        return True
+    except ClientError as e:
+        print(f"Error deleting: {e}")
+        return False    

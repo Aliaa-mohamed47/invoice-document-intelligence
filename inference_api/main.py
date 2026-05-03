@@ -34,7 +34,7 @@ from ai.finetuning.config import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("invoice-api")
 
-MODEL_PATH = os.getenv("MODEL_PATH", "ai/model/saved_model")
+MODEL_PATH = os.getenv("MODEL_PATH", "/app/model/saved_model")
 S3_BUCKET  = os.getenv("S3_BUCKET", "invoice-intelligence-bucket")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
@@ -53,11 +53,21 @@ tokenizer = None
 def load_model_on_startup():
     global model, tokenizer
     if not os.path.exists(MODEL_PATH):
-        logger.warning(f"Model not found at {MODEL_PATH} — running in MOCK mode")
-        return
-    logger.info(f"Loading model from {MODEL_PATH} ...")
+        logger.info("Downloading model from S3...")
+        s3 = boto3.client("s3", region_name="eu-north-1")
+        os.makedirs(MODEL_PATH, exist_ok=True)
+        bucket = "invoice-intelligence-storage-2026"
+        prefix = "ai/model/saved_model"
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                local_path = os.path.join(MODEL_PATH, os.path.relpath(key, prefix))
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                s3.download_file(bucket, key, local_path)
+        logger.info("Model downloaded from S3")
     tokenizer = LayoutLMTokenizerFast.from_pretrained(MODEL_PATH)
-    model     = LayoutLMForTokenClassification.from_pretrained(MODEL_PATH)
+    model = LayoutLMForTokenClassification.from_pretrained(MODEL_PATH)
     model.eval()
     logger.info("Model loaded successfully")
 

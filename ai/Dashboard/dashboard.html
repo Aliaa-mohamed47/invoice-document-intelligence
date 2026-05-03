@@ -535,8 +535,7 @@ header {
 </div>
 
 <script>
-const BACKEND = 'http://localhost:8080';
-
+const BACKEND = 'https://ntajbpjvngbmfssgn5img3usnu0czjkk.lambda-url.us-east-1.on.aws';
 function toggleTheme() {
   const h = document.documentElement;
   h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark';
@@ -623,7 +622,7 @@ function renderInvoices(invoices) {
           <div class="avatar">${initials(inv.company)}</div>
           <div>
             <div class="inv-id">${inv.invoice_id || 'INV_???'}</div>
-            <div class="inv-file">${inv.original_filename || ''}</div>
+            <div class="inv-file">${inv.filename || ''}</div>
           </div>
         </div>
         <span class="badge ${inv.status}">${inv.status}</span>
@@ -642,14 +641,14 @@ function renderInvoices(invoices) {
           <span>${new Date(inv.created_at).toLocaleString()}</span>
         </div>
         <div class="card-actions">
-          <button class="btn-del" onclick="deleteInvoice(${inv.id})">
+          <button class="btn-del" onclick="deleteInvoice('${inv.id}')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
             </svg>
             Delete
           </button>
           ${inv.status==='PENDING'
-            ? `<button class="btn-ok" onclick="confirmInvoice(${inv.id})">
+            ? `<button class="btn-ok" onclick="confirmInvoice('${inv.id}')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                 Confirm
               </button>`
@@ -661,8 +660,8 @@ function renderInvoices(invoices) {
 }
 
 function fld(key, label, value, score, id) {
-  const pct = score ? Math.round(score*100) : 0;
-  const cls = score >= 0.8 ? 'h' : score >= 0.5 ? 'm' : 'l';
+  const pct = score ? Math.round(parseFloat(score)*100) : 0;
+  const cls = parseFloat(score) >= 0.8 ? 'h' : parseFloat(score) >= 0.5 ? 'm' : 'l';
   return `<div class="field">
     <label>${label}</label>
     <input type="text" id="field-${id}-${key}" value="${value||''}" placeholder="not extracted"/>
@@ -697,7 +696,7 @@ function updateStats(invoices) {
   const total = invoices.length;
   const pending = invoices.filter(i=>i.status==='PENDING').length;
   const confirmed = invoices.filter(i=>i.status==='CONFIRMED').length;
-  const scores = invoices.flatMap(i=>[i.company_score,i.date_score,i.total_score,i.address_score].filter(s=>s>0));
+  const scores = invoices.flatMap(i=>[i.company_score,i.date_score,i.total_score,i.address_score].map(s=>parseFloat(s)||0).filter(s=>s>0));
   const avg = scores.length ? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*100) : 0;
 
   document.getElementById('statTotal').textContent = total;

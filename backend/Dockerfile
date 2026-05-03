@@ -1,13 +1,13 @@
-FROM python:3.11-slim
+FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.11
 
-WORKDIR /var/task
+WORKDIR ${LAMBDA_TASK_ROOT}
 
-# تثبيت المكتبات الضرورية
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# نسخ الكود
-COPY . .
+COPY backend/ ./
 
-# Lambda بتحتاج Handler محدد
+ENV PYTHONPATH=${LAMBDA_TASK_ROOT}
+ENV PYTHONDONTWRITEBYTECODE=1
+
 CMD ["main.handler"]

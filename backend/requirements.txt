@@ -1,10 +1,6 @@
-fastapi==0.111.0
-uvicorn==0.29.0
-sqlalchemy==2.0.30
-httpx==0.27.0
-python-multipart==0.0.9
-pydantic==2.7.1
-psycopg2-binary==2.9.9
-python-dotenv==1.0.1
-mangum==0.17.0  # ضروري لـ Lambda
-boto3==1.34.0   # للتعامل مع S3
+fastapi
+mangum
+boto3
+httpx
+pydantic
+python-multipart
