@@ -390,6 +390,34 @@ header {
   display:flex; align-items:center; gap:8px;
   pointer-events:none;
 }
+.history-panel {
+  border-top: 1px solid var(--border);
+  padding: 14px 18px;
+  display: none;
+  background: var(--bg);
+}
+.history-panel.open { display: block; }
+.history-title { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); font-family: 'JetBrains Mono', monospace; margin-bottom: 12px; }
+.history-steps { display: flex; gap: 0; align-items: center; flex-wrap: wrap; gap: 6px; }
+.h-step {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-family: 'JetBrains Mono', monospace;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 12px;
+}
+.h-step.success { border-color: rgba(74,222,128,0.3); color: var(--green); }
+.h-step.failed  { border-color: rgba(248,113,113,0.3); color: var(--red); }
+.h-step.retrying { border-color: rgba(245,158,11,0.3); color: var(--amber); }
+.h-dot { width:5px; height:5px; border-radius:50%; background: currentColor; }
+.btn-history {
+  display:flex; align-items:center; gap:5px;
+  padding: 6px 14px; border-radius: 7px; font-size: 11px;
+  cursor:pointer; border: 1px solid var(--border);
+  font-family:'JetBrains Mono',monospace;
+  background:none; color:var(--muted);
+  transition: all var(--transition);
+}
+.btn-history:hover { border-color: var(--accent); color: var(--accent); }
 .toast.show { transform:translateY(0); opacity:1; }
 .toast-dot { width:6px; height:6px; border-radius:50%; background:var(--green); flex-shrink:0; }
 .toast.err .toast-dot { background:var(--red); }
@@ -545,7 +573,38 @@ function toggleTheme() {
   const s = localStorage.getItem('ii-theme') || 'dark';
   document.documentElement.dataset.theme = s;
 })();
+async function toggleHistory(invoiceId, docId) {
+  const panel = document.getElementById(`history-${invoiceId}`);
+  const steps  = document.getElementById(`history-steps-${invoiceId}`);
+  
+  if (panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    return;
+  }
 
+  panel.classList.add('open');
+  steps.innerHTML = '<span style="color:var(--muted);font-size:11px;font-family:JetBrains Mono,monospace">loading...</span>';
+
+  try {
+    const r = await fetch(`${BACKEND}/api/invoices/${docId}/history`);
+    const d = await r.json();
+    
+    if (!d.history || !d.history.length) {
+      steps.innerHTML = '<span style="color:var(--muted);font-size:11px;font-family:JetBrains Mono,monospace">no history found</span>';
+      return;
+    }
+
+    steps.innerHTML = d.history.map(h => `
+      <div class="h-step ${h.status}">
+        <div class="h-dot"></div>
+        ${h.stage}
+      </div>
+    `).join('<span style="color:var(--muted);font-size:10px">→</span>');
+
+  } catch(e) {
+    steps.innerHTML = '<span style="color:var(--red);font-size:11px;font-family:JetBrains Mono,monospace">failed to load</span>';
+  }
+}
 async function checkStatus() {
   try {
     const r = await fetch(`${BACKEND}/health`);
@@ -641,7 +700,10 @@ function renderInvoices(invoices) {
           <span>${new Date(inv.created_at).toLocaleString()}</span>
         </div>
         <div class="card-actions">
-          <button class="btn-del" onclick="deleteInvoice('${inv.id}')">
+          <button class="btn-history" onclick="toggleHistory('${inv.id}','${inv.pipeline_doc_id||inv.id}')">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            History
+          </button>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
             </svg>
@@ -654,6 +716,12 @@ function renderInvoices(invoices) {
               </button>`
             : `<div class="confirmed-tag"><div class="check-circle">✓</div>Confirmed</div>`
           }
+        </div>
+        <div class="history-panel" id="history-${inv.id}">
+          <div class="history-title">Pipeline History</div>
+          <div class="history-steps" id="history-steps-${inv.id}">
+            <span style="color:var(--muted);font-size:11px;font-family:JetBrains Mono,monospace">loading...</span>
+          </div>
         </div>
       </div>
     </div>`).join('');

@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 from pydantic import BaseModel
 from typing import Optional
-
+from pipeline_tracker import create_document_record, update_stage
+from dlq_handler import handle_failure, send_to_processing_queue
 from database import save_invoice_to_db, get_all_invoices_from_db, get_invoice_by_id, delete_invoice_from_db
 import logging
 logger = logging.getLogger(__name__)
@@ -37,6 +38,19 @@ def health_check():
         "inference_api": INFERENCE_API_URL or "NOT CONFIGURED"
     }
 
+@app.get("/api/invoices")
+def list_invoices():
+    invoices = get_all_invoices_from_db()
+    return sorted(invoices, key=lambda x: x.get('created_at', ''), reverse=True)
+
+@app.get("/api/invoices/{invoice_id}")
+def get_invoice(invoice_id: str):
+    invoice = get_invoice_by_id(invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return invoice
+
+
 @app.post("/api/invoices/upload")
 async def upload_invoice(file: UploadFile = File(...)):
     if not S3_BUCKET:
@@ -59,9 +73,15 @@ async def upload_invoice(file: UploadFile = File(...)):
         logger.info(f"Uploaded to S3: {s3_key}")
     except Exception as e:
         logger.error(f"S3 Upload Failed: {e}")
+        raise HTTPException(status_code=500, detail="S3 upload failed")
+
+    # ✅ بونص: سجل الـ document في pipeline tracker
+    doc_id = create_document_record(file.filename, s3_key)
+    send_to_processing_queue(doc_id, file.filename, s3_key)
 
     # 2. بعت الصورة لـ inference_api
     try:
+        update_stage(doc_id, "extracting", message="Sending to AI model")
         logger.info("Calling Inference API...")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -71,9 +91,15 @@ async def upload_invoice(file: UploadFile = File(...)):
             response.raise_for_status()
             inference_result = response.json()
         logger.info(f"Inference result: {inference_result}")
+        update_stage(doc_id, "validating", message="Extraction done, awaiting confirmation")
+
     except httpx.TimeoutException:
+        # ✅ بونص: لو timeout → retry
+        handle_failure(doc_id, "extracting", "Inference API timeout")
         raise HTTPException(status_code=504, detail="Inference API timeout")
     except Exception as e:
+        # ✅ بونص: لو error → retry أو DLQ
+        handle_failure(doc_id, "extracting", str(e))
         logger.error(f"Inference API Error: {e}")
         raise HTTPException(status_code=502, detail=f"AI Processing failed: {str(e)}")
 
@@ -93,25 +119,21 @@ async def upload_invoice(file: UploadFile = File(...)):
         "total_score": str(confidence_scores.get("total", 0)),
         "address_score": str(confidence_scores.get("address", 0)),
         "status": "PENDING",
+        "pipeline_doc_id": doc_id,
         "created_at": datetime.now().isoformat()
     }
 
-    if save_invoice_to_db(invoice_data):
-        return invoice_data
+    try:
+        update_stage(doc_id, "storing", message="Saving to database")
+        if save_invoice_to_db(invoice_data):
+            update_stage(doc_id, "completed", message="Invoice processed successfully")
+            # ✅ رجّع الـ doc_id مع الـ response عشان الـ dashboard يعرف يجيب الـ history
+            invoice_data["pipeline_doc_id"] = doc_id
+            return invoice_data
+    except Exception as e:
+        handle_failure(doc_id, "storing", str(e))
 
     raise HTTPException(status_code=500, detail="Database save failed")
-
-@app.get("/api/invoices")
-def list_invoices():
-    invoices = get_all_invoices_from_db()
-    return sorted(invoices, key=lambda x: x.get('created_at', ''), reverse=True)
-
-@app.get("/api/invoices/{invoice_id}")
-def get_invoice(invoice_id: str):
-    invoice = get_invoice_by_id(invoice_id)
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    return invoice
 
 @app.put("/api/invoices/{invoice_id}/confirm")
 async def confirm_invoice(invoice_id: str, body: ConfirmRequest):
@@ -141,3 +163,15 @@ async def delete_invoice(invoice_id: str):
     
     delete_invoice_from_db(invoice_id)
     return {"deleted": invoice_id}
+
+@app.get("/api/invoices/{invoice_id}/history")
+def get_pipeline_history(invoice_id: str):
+    """
+    بيجيب الـ processing history كاملة للـ invoice.
+    ده اللي بيثبت البونص في الـ review.
+    """
+    from pipeline_tracker import get_history
+    history = get_history(invoice_id)
+    if not history:
+        raise HTTPException(status_code=404, detail="No history found")
+    return {"invoice_id": invoice_id, "history": history}
