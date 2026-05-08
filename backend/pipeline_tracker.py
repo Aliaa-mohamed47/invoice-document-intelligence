@@ -71,9 +71,8 @@ def update_stage(document_id: str, new_stage: str,
             UpdateExpression="""
                 SET current_stage = :stage,
                     updated_at    = :now,
-                    #hist          = list_append(#hist, :entry)
+                    history       = list_append(history, :entry)
             """,
-            ExpressionAttributeNames={"#hist": "history"},
             ExpressionAttributeValues={
                 ":stage": new_stage,
                 ":now":   now,
@@ -89,26 +88,25 @@ def update_stage(document_id: str, new_stage: str,
 
 
 # ── Retry Logic ──────────────────────────────────────────
-def increment_retry(document_id: str) -> int:
+def update_retry_count(document_id: str, count: int) -> bool:
     """
-    بتزود الـ retry_count بـ 1.
-    لو وصل 3 → بترجع -1 كإشارة إن الـ document هتروح DLQ.
+    بتحدث رقم المحاولات وتوقيت التحديث في DynamoDB.
     """
+    now = datetime.now(timezone.utc).isoformat()
     try:
-        response = table.update_item(
+        table.update_item(
             Key={"document_id": document_id},
-            UpdateExpression="SET retry_count = retry_count + :inc",
-            ExpressionAttributeValues={":inc": 1},
-            ReturnValues="UPDATED_NEW"
+            UpdateExpression="SET retry_count = :r, updated_at = :now",
+            ExpressionAttributeValues={
+                ":r": count,
+                ":now": now
+            }
         )
-        count = int(response["Attributes"]["retry_count"])
-        print(f"[TRACKER] Retry count for {document_id}: {count}")
-        return count
-
+        print(f"[TRACKER] {document_id} retry count updated to: {count}")
+        return True
     except ClientError as e:
         print(f"[TRACKER ERROR] {e.response['Error']['Message']}")
-        return -1
-
+        return False
 
 # ── Get Record ───────────────────────────────────────────
 def get_document(document_id: str) -> dict | None:
@@ -132,3 +130,5 @@ def get_history(document_id: str) -> list:
     if doc:
         return doc.get("history", [])
     return []
+
+increment_retry = update_retry_count

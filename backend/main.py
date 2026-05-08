@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 from pydantic import BaseModel
 from typing import Optional
-from pipeline_tracker import create_document_record, update_stage
+from pipeline_tracker import create_document_record, update_stage, update_retry_count
 from dlq_handler import handle_failure, send_to_processing_queue
 from database import save_invoice_to_db, get_all_invoices_from_db, get_invoice_by_id, delete_invoice_from_db
 import logging
@@ -80,28 +80,45 @@ async def upload_invoice(file: UploadFile = File(...)):
     send_to_processing_queue(doc_id, file.filename, s3_key)
 
     # 2. بعت الصورة لـ inference_api
-    try:
-        update_stage(doc_id, "extracting", message="Sending to AI model")
-        logger.info("Calling Inference API...")
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{INFERENCE_API_URL}/extract",
-                files={"file": (file.filename, file_bytes, file.content_type)}
-            )
-            response.raise_for_status()
-            inference_result = response.json()
-        logger.info(f"Inference result: {inference_result}")
-        update_stage(doc_id, "validating", message="Extraction done, awaiting confirmation")
+    # 2. بعت الصورة لـ inference_api مع نظام المحاولات (Retries)
+    max_retries = 3
+    retry_count = 0
+    inference_result = None
 
-    except httpx.TimeoutException:
-        # ✅ بونص: لو timeout → retry
-        handle_failure(doc_id, "extracting", "Inference API timeout")
-        raise HTTPException(status_code=504, detail="Inference API timeout")
-    except Exception as e:
-        # ✅ بونص: لو error → retry أو DLQ
-        handle_failure(doc_id, "extracting", str(e))
-        logger.error(f"Inference API Error: {e}")
-        raise HTTPException(status_code=502, detail=f"AI Processing failed: {str(e)}")
+    while retry_count < max_retries:
+        try:
+            # تحديث المرحلة ورقم المحاولة في الـ History
+            update_stage(doc_id, "extracting", message=f"Sending to AI model (Attempt {retry_count + 1})")
+            logger.info(f"Calling Inference API... Attempt {retry_count + 1}")
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{INFERENCE_API_URL}/extract",
+                    files={"file": (file.filename, file_bytes, file.content_type)}
+                )
+                response.raise_for_status()
+                inference_result = response.json()
+            
+            # لو الكود وصل هنا معناه نجح، نخرج من الـ Loop
+            break 
+
+        except Exception as e:
+            retry_count += 1
+            logger.error(f"Attempt {retry_count} failed: {str(e)}")
+            
+            # تحديث الـ retry_count في DynamoDB عشان يظهر في الجدول بتاعك
+            # هننادي فانكشن تحديث الـ retry count (تأكدي من وجودها في pipeline_tracker)
+            update_retry_count(doc_id, retry_count)
+            
+            if retry_count >= max_retries:
+                handle_failure(doc_id, "extracting", f"Failed after {max_retries} attempts: {str(e)}")
+                raise HTTPException(status_code=502, detail=f"AI Processing failed after retries: {str(e)}")
+            
+            # استراحة بسيطة (ثانيتين) قبل ما نجرب تاني
+            import asyncio
+            await asyncio.sleep(2)
+
+    update_stage(doc_id, "validating", message="Extraction done, awaiting confirmation")
 
     # 3. حفظ في DynamoDB
     fields = inference_result.get("extracted_fields", {})
