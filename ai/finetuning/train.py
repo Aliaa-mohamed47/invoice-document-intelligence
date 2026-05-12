@@ -29,12 +29,12 @@ def main():
 
     training_args = TrainingArguments(
         output_dir=RESULTS_DIR,
-        per_device_train_batch_size=4, # Increased for better stability, depends on GPU memory
+        per_device_train_batch_size=4,
         per_device_eval_batch_size=4,
-        num_train_epochs=5,            # Increased epochs since we have Early Stopping
+        num_train_epochs=5,
         logging_steps=10,
         save_steps=50,
-        eval_strategy="epoch",         # Updated from deprecated evaluation_strategy
+        eval_strategy="epoch", 
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",

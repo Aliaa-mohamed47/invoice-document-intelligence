@@ -19,7 +19,7 @@ ai/data/test.json
 SROIE2019/
 
 # ── Evaluation results ────────────────────────────────────
-evaluation_results/
+# evaluation_results/
 
 # ── Java / Maven ─────────────────────────────────────────
 backend/target/

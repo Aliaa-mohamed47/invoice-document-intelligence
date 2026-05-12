@@ -61,7 +61,6 @@ async def upload_invoice(file: UploadFile = File(...)):
     file_bytes = await file.read()
     invoice_id = str(uuid.uuid4())
 
-    # 1. رفع لـ S3
     s3_key = f"invoices/{invoice_id}_{file.filename}"
     try:
         s3_client.put_object(
@@ -75,19 +74,15 @@ async def upload_invoice(file: UploadFile = File(...)):
         logger.error(f"S3 Upload Failed: {e}")
         raise HTTPException(status_code=500, detail="S3 upload failed")
 
-    # ✅ بونص: سجل الـ document في pipeline tracker
     doc_id = create_document_record(file.filename, s3_key)
     send_to_processing_queue(doc_id, file.filename, s3_key)
 
-    # 2. بعت الصورة لـ inference_api
-    # 2. بعت الصورة لـ inference_api مع نظام المحاولات (Retries)
     max_retries = 3
     retry_count = 0
     inference_result = None
 
     while retry_count < max_retries:
         try:
-            # تحديث المرحلة ورقم المحاولة في الـ History
             update_stage(doc_id, "extracting", message=f"Sending to AI model (Attempt {retry_count + 1})")
             logger.info(f"Calling Inference API... Attempt {retry_count + 1}")
             
@@ -99,28 +94,23 @@ async def upload_invoice(file: UploadFile = File(...)):
                 response.raise_for_status()
                 inference_result = response.json()
             
-            # لو الكود وصل هنا معناه نجح، نخرج من الـ Loop
             break 
 
         except Exception as e:
             retry_count += 1
             logger.error(f"Attempt {retry_count} failed: {str(e)}")
             
-            # تحديث الـ retry_count في DynamoDB عشان يظهر في الجدول بتاعك
-            # هننادي فانكشن تحديث الـ retry count (تأكدي من وجودها في pipeline_tracker)
             update_retry_count(doc_id, retry_count)
             
             if retry_count >= max_retries:
                 handle_failure(doc_id, "extracting", f"Failed after {max_retries} attempts: {str(e)}")
                 raise HTTPException(status_code=502, detail=f"AI Processing failed after retries: {str(e)}")
             
-            # استراحة بسيطة (ثانيتين) قبل ما نجرب تاني
             import asyncio
             await asyncio.sleep(2)
 
     update_stage(doc_id, "validating", message="Extraction done, awaiting confirmation")
 
-    # 3. حفظ في DynamoDB
     fields = inference_result.get("extracted_fields", {})
     confidence_scores = inference_result.get("confidence_scores", {})
     invoice_data = {
@@ -144,7 +134,6 @@ async def upload_invoice(file: UploadFile = File(...)):
         update_stage(doc_id, "storing", message="Saving to database")
         if save_invoice_to_db(invoice_data):
             update_stage(doc_id, "completed", message="Invoice processed successfully")
-            # ✅ رجّع الـ doc_id مع الـ response عشان الـ dashboard يعرف يجيب الـ history
             invoice_data["pipeline_doc_id"] = doc_id
             return invoice_data
     except Exception as e:
@@ -183,10 +172,7 @@ async def delete_invoice(invoice_id: str):
 
 @app.get("/api/invoices/{invoice_id}/history")
 def get_pipeline_history(invoice_id: str):
-    """
-    بيجيب الـ processing history كاملة للـ invoice.
-    ده اللي بيثبت البونص في الـ review.
-    """
+
     from pipeline_tracker import get_history
     history = get_history(invoice_id)
     if not history:

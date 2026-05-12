@@ -1,7 +1,3 @@
-# inference_api/main.py  ── FIXED VERSION
-# ─────────────────────────────────────────────────────────────────────────────
-# FastAPI Inference Service — Invoice Document Intelligence
-# ─────────────────────────────────────────────────────────────────────────────
 
 import io
 import os
@@ -93,7 +89,6 @@ app.add_middleware(
 )
 
 
-# ── S3 upload ─────────────────────────────────────────────────────────────────
 def upload_to_s3(file_bytes: bytes, filename: str) -> str | None:
     try:
         s3  = boto3.client("s3", region_name=AWS_REGION)
@@ -106,20 +101,16 @@ def upload_to_s3(file_bytes: bytes, filename: str) -> str | None:
         return None
 
 
-# ── OCR extraction ────────────────────────────────────────────────────────────
-# FIX 1: PIL is RGB — convert correctly to grayscale without BGR flip
 def extract_tokens_from_image(image: Image.Image):
     """
     Returns (tokens, bboxes, img_width, img_height).
     We return actual image dimensions so normalize_bbox works correctly.
     """
-    img_width, img_height = image.size          # PIL: (width, height)
+    img_width, img_height = image.size        
 
-    # ✅ FIX: PIL → numpy RGB → grayscale directly (no BGR conversion)
     img_np = np.array(image.convert("RGB"))
     gray   = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
 
-    # Deskew
     coords = np.column_stack(np.where(gray > 0))
     if len(coords) > 0:
         angle = cv2.minAreaRect(coords)[-1]
@@ -131,7 +122,6 @@ def extract_tokens_from_image(image: Image.Image):
                                   flags=cv2.INTER_CUBIC,
                                   borderMode=cv2.BORDER_REPLICATE)
 
-    # Adaptive threshold
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     gray = cv2.adaptiveThreshold(
         gray, 255,
@@ -148,7 +138,7 @@ def extract_tokens_from_image(image: Image.Image):
         if not text.strip():
             continue
         conf = int(data["conf"][i])
-        if conf < 30:          # ✅ FIX: skip low-confidence OCR noise
+        if conf < 30:         
             continue
         x, y, w, h = data["left"][i], data["top"][i], data["width"][i], data["height"][i]
         tokens.append(text.strip())
@@ -158,8 +148,7 @@ def extract_tokens_from_image(image: Image.Image):
     return tokens, bboxes, img_width, img_height
 
 
-# ── Bounding box normalization ────────────────────────────────────────────────
-# FIX 2: use actual image dimensions, not hardcoded PAGE_WIDTH/HEIGHT
+
 def normalize_bbox(bbox, w, h):
     x0, y0, x1, y1 = bbox
     return [
@@ -170,12 +159,9 @@ def normalize_bbox(bbox, w, h):
     ]
 
 
-# ── Improved fallback extraction ──────────────────────────────────────────────
-# FIX 3: proper regex fallback — no more tokens[0] as company
 def fallback_extraction(tokens: list) -> dict:
     text = " ".join(tokens)
 
-    # Date patterns
     date_patterns = [
         r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b',
         r'\b(\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})\b',
@@ -188,7 +174,6 @@ def fallback_extraction(tokens: list) -> dict:
             date = m.group(1)
             break
 
-    # Total patterns — prefer lines that explicitly say total/amount
     total = None
     total_patterns = [
         r'(?:TOTAL|AMOUNT|GRAND\s*TOTAL)[^\d]{0,15}(RM\s*)?(\d[\d,]*\.\d{2})',
@@ -201,7 +186,6 @@ def fallback_extraction(tokens: list) -> dict:
             total = m.group(m.lastindex)
             break
 
-    # Company — look for ALL CAPS lines near the top (first 30% of tokens)
     company = None
     top_tokens = tokens[:max(1, len(tokens) // 3)]
     top_text   = " ".join(top_tokens)
@@ -209,7 +193,6 @@ def fallback_extraction(tokens: list) -> dict:
     if caps_m:
         company = caps_m.group(1).strip()
 
-    # Address — look for street keywords
     address = None
     addr_m  = re.search(
         r'(\d+[,\s]+[\w\s]+(?:STREET|ST|ROAD|RD|AVE|AVENUE|JALAN|JLN|LANE|LN)[^\n]{0,60})',
@@ -230,7 +213,6 @@ def fallback_extraction(tokens: list) -> dict:
     }
 
 
-# ── Model inference ───────────────────────────────────────────────────────────
 def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -> dict:
     if model is None or tokenizer is None:
         return {
@@ -240,7 +222,6 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
             "total_score": 0.95,       "address_score": 0.72,
         }
 
-    # FIX 2 applied here: use real dimensions
     norm_bboxes = [normalize_bbox(b, img_width, img_height) for b in bboxes]
 
     encoding = tokenizer(
@@ -292,7 +273,6 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
             raw_value = " ".join(entities[f])
             avg_conf  = sum(entity_probs[f]) / len(entity_probs[f])
 
-            # FIX 4: lower threshold — trust model more
             if avg_conf >= 0.50:
                 result[f]            = raw_value
                 result[f"{f}_score"] = round(avg_conf, 4)
@@ -303,8 +283,6 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
             result[f]            = None
             result[f"{f}_score"] = 0.0
 
-    # Post-process: deduplicate repeated date tokens (e.g. "03/03/2018 03/03/2018")
-    # FIX 5: date dedup
     if result.get("date"):
         date_val = result["date"]
         parts    = date_val.split()
@@ -314,7 +292,6 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
                 seen_p.append(p)
         result["date"] = " ".join(seen_p)
 
-    # Fallback only for missing fields
     fb = fallback_extraction(tokens)
     for f in FIELDS:
         if not result[f]:
@@ -329,7 +306,6 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
     return result
 
 
-# ── Response formatter ────────────────────────────────────────────────────────
 def format_response(invoice_id: str, raw: dict, s3_key: str | None, start: float):
     return {
         "invoice_id":       invoice_id,
@@ -341,7 +317,6 @@ def format_response(invoice_id: str, raw: dict, s3_key: str | None, start: float
     }
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {
@@ -375,7 +350,6 @@ async def extract(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid file: {e}")
 
-    # ✅ FIX: get actual image dimensions from OCR function
     tokens, bboxes, img_width, img_height = extract_tokens_from_image(image)
 
     if not tokens:

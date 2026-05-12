@@ -1,11 +1,5 @@
-# docker-compose.yml
-# ─────────────────────────────────────────────────────────────────────────────
-# Invoice Document Intelligence System
-# ─────────────────────────────────────────────────────────────────────────────
-
 services:
 
-  # ── 1. FastAPI Inference Service  ──────────────────────────────────
   inference-api:
     build:
       context: .
@@ -30,7 +24,6 @@ services:
       - invoice-net
     restart: unless-stopped
 
-  # ── 2. FastAPI Backend ─────────────────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -54,7 +47,6 @@ services:
       - invoice-net
     restart: unless-stopped
 
-  # ── 3. PostgreSQL Database ─────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
     container_name: invoice-db
@@ -75,7 +67,6 @@ services:
       - invoice-net
     restart: unless-stopped
 
-# ── Volumes & Networks ─────────────────────────────────────────────────────
 volumes:
   postgres_data:
 

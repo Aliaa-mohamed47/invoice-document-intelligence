@@ -8,7 +8,6 @@ from PIL import Image
 import pytesseract
 from transformers import LayoutLMTokenizerFast, LayoutLMForTokenClassification
 
-# إعداد المسارات
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from finetuning.config import LABEL_LIST, LABEL2ID, ID2LABEL, MAX_SEQ_LENGTH
 
@@ -17,11 +16,9 @@ FIELDS     = ["company", "date", "total", "address"]
 FIELD_MAP  = {"COMPANY": "company", "DATE": "date", "TOTAL": "total", "ADDRESS": "address"}
 
 def load_model(model_path=MODEL_PATH):
-    """تحميل الموديل والـ Tokenizer (نسخة الـ Fast اللي نجحت في التست)"""
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model directory not found at: {model_path}")
 
-    # استخدمنا LayoutLMTokenizerFast عشان يقرأ tokenizer.json صح
     tokenizer = LayoutLMTokenizerFast.from_pretrained(model_path)
     model     = LayoutLMForTokenClassification.from_pretrained(model_path, use_safetensors=True)
     model.eval()
@@ -36,14 +33,10 @@ def normalize_bbox(bbox, width, height):
         max(0, min(int(1000 * y1 / height), 1000)),
     ]
 
-# --- الدالة الجديدة للربط مع main.py ---
 def predict_invoice(file_bytes, model, tokenizer):
-    """تحويل الصورة لنصوص ثم استخراج الحقول"""
-    # 1. فتح الصورة
     image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
     width, height = image.size
 
-    # 2. تشغيل Tesseract OCR للحصول على الكلمات وأماكنها
     ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
     
     tokens = []
@@ -51,23 +44,19 @@ def predict_invoice(file_bytes, model, tokenizer):
     
     for i in range(len(ocr_data['text'])):
         word = ocr_data['text'][i].strip()
-        if word != "": # نأخذ الكلمات غير الفارغة فقط
+        if word != "": 
             tokens.append(word)
-            # إحداثيات Tesseract تكون [left, top, width, height]
             x, y, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
             bboxes.append([x, y, x + w, y + h])
 
     if not tokens:
         return {"extracted_fields": {}}
 
-    # 3. استدعاء وظيفة الاستخراج الأصلية
     raw_results = extract_entities(tokens, bboxes, model, tokenizer, width, height)
     
-    # 4. تنظيف النتيجة لترجع للـ API بشكل بسيط
     clean_result = {field: res["value"] for field, res in raw_results.items()}
     return {"extracted_fields": clean_result}
 
-# --- بقية الدوال (regex_fallback و extract_entities) تبقى كما هي في كودك ---
 def regex_fallback(field: str, tokens: list[str]) -> str | None:
     text = " ".join(tokens)
     patterns = {

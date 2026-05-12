@@ -25,11 +25,9 @@ def load_split(split_dir: str) -> list[dict]:
     for box_file in sorted(box_dir.glob("*.txt")):
         sample_id = box_file.stem           # e.g. "X51005365187"
 
-        # ── OCR lines ──────────────────────────────────────────────────────────
         with open(box_file, "r", encoding="utf-8", errors="replace") as f:
             box_lines = [line.rstrip("\n") for line in f if line.strip()]
 
-        # ── Entities JSON ───────────────────────────────────────────────────────
         entity_file = entity_dir / f"{sample_id}.txt"
         if not entity_file.exists():
             entity_file = entity_dir / f"{sample_id}.json"

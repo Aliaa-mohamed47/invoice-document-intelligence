@@ -55,9 +55,6 @@ for d in [OUTPUT_DIR, BEST_DIR]:
 tokenizer = LayoutLMTokenizerFast.from_pretrained(BASE_MODEL_NAME)
 
 
-# ── Class weights ─────────────────────────────────────────────────────────────
-# FIX: balanced weights — ADDRESS and TOTAL are rare so upweight them
-# O, B-COMPANY, I-COMPANY, B-DATE, I-DATE, B-TOTAL, I-TOTAL, B-ADDRESS, I-ADDRESS
 CLASS_WEIGHTS = torch.tensor(
     [0.1, 1.5, 1.5, 1.2, 1.2, 2.5, 2.5, 2.0, 2.0],
     dtype=torch.float
@@ -81,7 +78,6 @@ class WeightedTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
-# ── Preprocessing ─────────────────────────────────────────────────────────────
 def normalize_bbox(bbox, w=PAGE_WIDTH, h=PAGE_HEIGHT):
     x0, y0, x1, y1 = bbox
     return [
@@ -122,7 +118,6 @@ def tokenize_and_align(examples):
                 label_ids.append(LABEL2ID[labels[word_id]])
                 bbox_ids.append(norm[word_id])
             else:
-                # FIX: use -100 for sub-tokens (don't propagate label)
                 label_ids.append(-100)
                 bbox_ids.append(norm[word_id])
             prev_word_id = word_id
@@ -139,7 +134,6 @@ def build_dataset(json_path: str) -> Dataset:
     with open(json_path, "r", encoding="utf-8") as f:
         records = json.load(f)
 
-    # FIX: filter out records with no entity labels
     valid_records = []
     for r in records:
         if any(l != "O" for l in r["labels"]):
@@ -162,7 +156,6 @@ def build_dataset(json_path: str) -> Dataset:
     )
 
 
-# ── Metrics ───────────────────────────────────────────────────────────────────
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     preds          = np.argmax(logits, axis=-1)
@@ -184,7 +177,6 @@ def compute_metrics(eval_pred):
     return {"f1": f1}
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print(f"Train JSON : {os.path.abspath(TRAIN_JSON)}")
     print(f"Test  JSON : {os.path.abspath(TEST_JSON)}")

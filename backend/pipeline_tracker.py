@@ -4,22 +4,16 @@ from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 import os
 
-# ── Config ──────────────────────────────────────────────
 TABLE_NAME = os.getenv("DYNAMODB_TABLE", "invoice_pipeline")
 REGION     = os.getenv("AWS_REGION", "us-east-1")
 
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table    = dynamodb.Table(TABLE_NAME)
 
-# الـ stages الممكنة
 STAGES = ["uploaded", "extracting", "validating", "storing", "completed", "failed"]
 
-# ── Create ───────────────────────────────────────────────
 def create_document_record(filename: str, s3_key: str) -> str:
-    """
-    بتسجل invoice جديدة في DynamoDB.
-    بترجع document_id اللي هتستخدمه في كل الـ calls التانية.
-    """
+
     document_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
@@ -46,13 +40,9 @@ def create_document_record(filename: str, s3_key: str) -> str:
     return document_id
 
 
-# ── Update Stage ─────────────────────────────────────────
 def update_stage(document_id: str, new_stage: str,
                  status: str = "success", message: str = "") -> bool:
-    """
-    بتحدث الـ stage الحالية وبتضيف entry في الـ history.
-    status: "success" | "failed" | "retrying"
-    """
+
     if new_stage not in STAGES:
         raise ValueError(f"Invalid stage: {new_stage}. Must be one of {STAGES}")
 
@@ -87,11 +77,8 @@ def update_stage(document_id: str, new_stage: str,
         return False
 
 
-# ── Retry Logic ──────────────────────────────────────────
 def update_retry_count(document_id: str, count: int) -> bool:
-    """
-    بتحدث رقم المحاولات وتوقيت التحديث في DynamoDB.
-    """
+
     now = datetime.now(timezone.utc).isoformat()
     try:
         table.update_item(
@@ -108,11 +95,8 @@ def update_retry_count(document_id: str, count: int) -> bool:
         print(f"[TRACKER ERROR] {e.response['Error']['Message']}")
         return False
 
-# ── Get Record ───────────────────────────────────────────
 def get_document(document_id: str) -> dict | None:
-    """
-    بتجيب الـ record الكاملة من DynamoDB.
-    """
+
     try:
         response = table.get_item(Key={"document_id": document_id})
         return response.get("Item")
@@ -121,11 +105,8 @@ def get_document(document_id: str) -> dict | None:
         return None
 
 
-# ── Get History ──────────────────────────────────────────
 def get_history(document_id: str) -> list:
-    """
-    بترجع الـ processing history كاملة لـ document معين.
-    """
+
     doc = get_document(document_id)
     if doc:
         return doc.get("history", [])
