@@ -1,7 +1,7 @@
 # Evaluation Report
 ## Invoice / Document Intelligence System
 
-**Author:** الاء محمد  
+**Author:** Alaa Mohamed 
 **Role:** AI Evaluation & JSON Output Engineer  
 **Model:** bert-base-multilingual-cased fine-tuned with LoRA  
 **Date:** April 2026  

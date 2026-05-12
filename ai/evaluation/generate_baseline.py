@@ -1,14 +1,10 @@
-# ai/evaluation/generate_baseline.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Generates baseline_results.json using simulated OCR + rule-based accuracy.
-# Run this BEFORE evaluate.py so the comparison table works.
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 import json
 import os
 import sys
 
-# ✅ import FIELDS من config الموحّد
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from finetuning.config import LABEL_LIST
 

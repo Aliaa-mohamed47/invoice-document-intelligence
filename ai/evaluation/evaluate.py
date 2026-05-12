@@ -1,7 +1,3 @@
-# ai/evaluation/evaluate.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Evaluation — يقارن الـ baseline بالـ fine-tuned model
-# ─────────────────────────────────────────────────────────────────────────────
 
 import json
 import os
@@ -13,7 +9,7 @@ import torch
 from tqdm import tqdm
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-# ✅ import من config الموحّد
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from finetuning.config import (
     LABEL_LIST, LABEL2ID, ID2LABEL,
@@ -85,9 +81,7 @@ def normalize_bbox(bbox, width=PAGE_WIDTH, height=PAGE_HEIGHT):
 
 # ── Inference ─────────────────────────────────────────────────────────────────
 def real_predict(tokens, bboxes, model, tokenizer):
-    """
-    ✅ بنبعت الـ bboxes مع الـ tokens عشان LayoutLM يستخدم الـ spatial info
-    """
+
     encoding = tokenizer(
         tokens,
         is_split_into_words=True,
@@ -218,7 +212,6 @@ def run_evaluation(records, output_path, model, tokenizer):
     print("─" * 44)
     print(f"{'MACRO AVG':<12} {avg_p:>10.4f} {avg_r:>8.4f} {avg_f1:>8.4f}")
 
-    # ✅ context manager بدل open مفتوحة
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     print(f"\n[✓] Saved → {output_path}")
@@ -231,7 +224,6 @@ def compare():
         print("[!] baseline_results.json not found — skipping comparison")
         return
 
-    # ✅ context managers بدل open مفتوحة
     with open(BASELINE_OUT,  encoding="utf-8") as f:
         b = json.load(f)
     with open(FINETUNED_OUT, encoding="utf-8") as f:

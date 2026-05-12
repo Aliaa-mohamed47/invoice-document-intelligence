@@ -1,9 +1,3 @@
-# ai/evaluation/generate_charts.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Generates comparison charts after evaluation.
-# Run this AFTER evaluate.py and generate_baseline.py.
-# Output: evaluation_results/charts/
-# ─────────────────────────────────────────────────────────────────────────────
 
 import json
 import os
