@@ -1,92 +1,135 @@
 # deployment/aws_config.yml
-# Aliaa — AWS Deployment Guide
+# Invoice Intelligence System — AWS Deployment Guide
 
 aws:
   region: us-east-1
 
   s3:
-    bucket_name: invoice-intelligence-bucket
+    bucket_name: invoice-intelligence-storage-2026
+    region: eu-north-1
+    structure:
+      - invoices/   # uploaded invoice images (UUID-prefixed keys)
+      - ai/model/saved_model/  # LayoutLM fine-tuned model weights
 
+  dynamodb:
+    region: us-east-1
+    tables:
+      - name: InvoicesTable
+        partition_key: id (String)
+        description: Stores extracted invoice fields and status (PENDING / CONFIRMED)
+      - name: invoice_pipeline
+        partition_key: document_id (String)
+        description: Pipeline Tracker — full stage history per invoice
+      - name: Invoices
+        partition_key: id (String)
+        description: Legacy invoices table
 
-  ec2:
-    instance_type: t2.medium
-    ami: ami-0c02fb55956c7d316   
+  sqs:
+    region: us-east-1
+    queues:
+      - name: InvoiceProcessingQueue
+        description: Decouples upload from AI inference; retries up to 3 times
+      - name: InvoiceProcessingDLQ
+        description: Dead Letter Queue — receives failed invoices after 3 retries
 
+  lambda:
+    region: us-east-1
+    function_name: InvoiceProcessor
+    runtime: python3.11
+    handler: main.handler
+    trigger: API Gateway
+    adapter: Mangum (FastAPI → Lambda)
+    packaging: Docker container image via ECR
+    env_vars:
+      - S3_BUCKET_NAME: invoice-intelligence-storage-2026
+      - INFERENCE_API_URL: <ecs-fargate-service-url>
+      - AWS_REGION: us-east-1
+      - DYNAMODB_TABLE: InvoicesTable
+      - PIPELINE_TABLE: invoice_pipeline
+      - SQS_QUEUE_URL: <sqs-queue-url>
+      - DLQ_URL: <dlq-url>
 
-  security_group:
-    inbound:
-      - port: 22
-        source: your-ip/32
+  ecs_fargate:
+    region: us-east-1
+    service_name: invoice-inference
+    description: Hosts LayoutLM inference API (FastAPI on port 8000)
+    image_source: ECR
+    port: 8000
+    subnet: private (only reachable by Lambda)
+    env_vars:
+      - MODEL_PATH: /app/model/saved_model
+      - S3_BUCKET: invoice-intelligence-storage-2026
+      - AWS_REGION: eu-north-1
 
-      - port: 8000
-        source: 0.0.0.0/0 
+  ecr:
+    region: us-east-1
+    repositories:
+      - invoice-backend    # Lambda container image
+      - invoice-inference  # ECS Fargate inference container image
 
-      - port: 8080
-        source: 0.0.0.0/0 
-
-      - port: 5432
-        source: sg-internal  
-
+  cloudwatch:
+    description: Logging and monitoring
+    log_groups:
+      - /aws/lambda/InvoiceProcessor
+      - /ecs/invoice-inference
+    alerts:
+      - metric: Lambda error rate > 5%
+      - metric: SQS queue depth > 100
+      - metric: ECS container health failures
 
 
 steps:
 
-  1_create_s3:
+  1_build_and_push_inference:
+    description: Build and push LayoutLM inference image to ECR
     commands:
-      - aws s3 mb s3://invoice-intelligence-bucket --region us-east-1
-      - aws s3api put-bucket-cors --bucket invoice-intelligence-bucket \
-        --cors-configuration file://deployment/s3_cors.json
+      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
+      - docker build -f inference_api/Dockerfile -t invoice-inference .
+      - docker tag invoice-inference:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/invoice-inference:latest
+      - docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/invoice-inference:latest
 
-
-  2_launch_ec2:
+  2_deploy_ecs_fargate:
+    description: Deploy inference API as ECS Fargate service (private subnet)
     commands:
-      - "# Go to AWS Console > EC2 > Launch Instance"
-      - "# Select Amazon Linux 2023 + t2.medium"
-      - "# Configure Security Group (ports 8000, 8080)"
-      - "# Download key pair (.pem file)"
+      - "# Go to AWS Console > ECS > Create Cluster > Fargate"
+      - "# Create Task Definition using ECR image: invoice-inference"
+      - "# Set port 8000, assign private subnet, no public IP"
+      - "# Create Service from task definition"
 
-
-  3_connect_and_setup:
+  3_build_and_push_backend:
+    description: Build and push Lambda backend image to ECR
     commands:
-      - ssh -i your-key.pem ec2-user@<ec2-public-ip>
-      - sudo yum update -y
-      - sudo yum install -y docker git
-      - sudo systemctl start docker
-      - sudo usermod -aG docker ec2-user
+      - docker build -f backend/Dockerfile -t invoice-backend .
+      - docker tag invoice-backend:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/invoice-backend:latest
+      - docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/invoice-backend:latest
 
-      - sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) \
-        -o /usr/local/bin/docker-compose
-
-      - sudo chmod +x /usr/local/bin/docker-compose
-
-
-  4_deploy_project:
+  4_deploy_lambda:
+    description: Deploy FastAPI backend as Lambda function
     commands:
-      - git clone https://github.com/your-repo/invoice-intelligence.git
-      - cd invoice-intelligence
+      - "# Go to AWS Console > Lambda > Create Function > Container Image"
+      - "# Select ECR image: invoice-backend"
+      - "# Set handler: main.handler"
+      - "# Add API Gateway trigger"
+      - "# Set environment variables (S3, DynamoDB, SQS, INFERENCE_API_URL)"
+
+  5_configure_sqs:
+    description: Create processing queue and dead letter queue
+    commands:
+      - aws sqs create-queue --queue-name InvoiceProcessingDLQ
+      - aws sqs create-queue --queue-name InvoiceProcessingQueue --attributes '{"RedrivePolicy":"{\"deadLetterTargetArn\":\"<dlq-arn>\",\"maxReceiveCount\":\"3\"}"}'
+
+  6_verify:
+    commands:
+      - curl https://<api-gateway-url>/health
+      - curl https://<api-gateway-url>/api/invoices
+      - curl http://<ecs-service-url>:8000/health
+
+  7_local_dev:
+    description: Run locally using docker-compose (for development only)
+    commands:
       - cp .env.example .env
-      - "# Edit environment variables"
-      - nano .env
-      - docker-compose up -d --build
-
-
-  5_verify:
-    commands:
-      - docker-compose ps
-      - curl http://localhost:8000/health
-      - curl http://localhost:8080/api/invoices
-
-
-  6_cloudwatch_monitoring:
-    description: AWS CloudWatch logging and monitoring setup
-    commands:
-      - "# Go to AWS Console > CloudWatch > Log Groups"
-      - "# Logs will appear automatically from containers"
-      - "# Set alert: latency > 10 seconds"
-      - "# Set alert: error rate > 5%"
-
-
-urls:
-  inference_api: "http://<ec2-public-ip>:8000"
-  inference_docs: "http://<ec2-public-ip>:8000/docs"
-  backend_api: "http://<ec2-public-ip>:8080/api/invoices"
+      - "# Fill in AWS credentials in .env"
+      - docker-compose up --build
+      - "# Backend available at: http://localhost:9000"
+      - "# Inference API at:     http://localhost:8000"
+      - "# Dashboard at:         ai/Dashboard/index.html (open in browser)"

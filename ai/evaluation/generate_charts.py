@@ -31,7 +31,6 @@ baseline  = load(BASELINE_OUT)
 finetuned = load(FINETUNED_OUT)
 
 
-# ── Chart 1: F1 Comparison — Baseline vs Fine-tuned ───────────────────────
 base_f1 = [baseline["per_field"][f]["f1"]  for f in FIELDS]
 ft_f1   = [finetuned["per_field"][f]["f1"] for f in FIELDS]
 
@@ -65,7 +64,6 @@ plt.close()
 print(f"[✓] Saved → {path1}")
 
 
-# ── Chart 2: Precision / Recall / F1 per field (fine-tuned only) ──────────
 metrics_keys = ["precision", "recall", "f1"]
 colors       = ["#3498db", "#e67e22", "#2ecc71"]
 

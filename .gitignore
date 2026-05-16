@@ -21,6 +21,7 @@ SROIE2019/
 # ── Evaluation results ────────────────────────────────────
 # evaluation_results/
 
+.env
 # ── Java / Maven ─────────────────────────────────────────
 backend/target/
 *.class
