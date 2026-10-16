@@ -561,8 +561,10 @@ header {
   <span id="toastMsg"></span>
 </div>
 
+<!-- <script src="demo-backend.js"></script> -->
 <script>
-const BACKEND = 'https://ntajbpjvngbmfssgn5img3usnu0czjkk.lambda-url.us-east-1.on.aws';
+const BACKEND = 'http://127.0.0.1:8000';
+// const BACKEND = 'https://ntajbpjvngbmfssgn5img3usnu0czjkk.lambda-url.us-east-1.on.aws';
 function toggleTheme() {
   const h = document.documentElement;
   h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark';

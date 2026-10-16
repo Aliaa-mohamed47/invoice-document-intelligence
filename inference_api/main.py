@@ -1,4 +1,3 @@
-
 import io
 import os
 import re
@@ -8,7 +7,7 @@ import uuid
 import logging
 from contextlib import asynccontextmanager
 
-import boto3
+# import boto3
 import cv2
 import numpy as np
 import pytesseract
@@ -30,9 +29,10 @@ from ai.finetuning.config import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("invoice-api")
 
-MODEL_PATH = os.getenv("MODEL_PATH", "/app/model/saved_model")
-S3_BUCKET  = os.getenv("S3_BUCKET", "invoice-intelligence-bucket")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+# S3_BUCKET  = os.getenv("S3_BUCKET", "invoice-intelligence-bucket")
+# AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "ai", "model", "saved_model")
 
 FIELDS = ["company", "date", "total", "address"]
 FIELD_MAP = {
@@ -45,27 +45,30 @@ FIELD_MAP = {
 model     = None
 tokenizer = None
 
+# Local database for Dashboard
+LOCAL_INVOICES_DB = []
+
 
 def load_model_on_startup():
     global model, tokenizer
-    if not os.path.exists(MODEL_PATH):
-        logger.info("Downloading model from S3...")
-        s3 = boto3.client("s3", region_name="eu-north-1")
-        os.makedirs(MODEL_PATH, exist_ok=True)
-        bucket = "invoice-intelligence-storage-2026"
-        prefix = "ai/model/saved_model"
-        paginator = s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                local_path = os.path.join(MODEL_PATH, os.path.relpath(key, prefix))
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                s3.download_file(bucket, key, local_path)
-        logger.info("Model downloaded from S3")
+    # if not os.path.exists(MODEL_PATH):
+    #     logger.info("Downloading model from S3...")
+    #     s3 = boto3.client("s3", region_name="eu-north-1")
+    #     os.makedirs(MODEL_PATH, exist_ok=True)
+    #     bucket = "invoice-intelligence-storage-2026"
+    #     prefix = "ai/model/saved_model"
+    #     paginator = s3.get_paginator("list_objects_v2")
+    #     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    #         for obj in page.get("Contents", []):
+    #             key = obj["Key"]
+    #             local_path = os.path.join(MODEL_PATH, os.path.relpath(key, prefix))
+    #             os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    #             s3.download_file(bucket, key, local_path)
+    #     logger.info("Model downloaded from S3")
     tokenizer = LayoutLMTokenizerFast.from_pretrained(MODEL_PATH)
     model = LayoutLMForTokenClassification.from_pretrained(MODEL_PATH)
     model.eval()
-    logger.info("Model loaded successfully")
+    logger.info("LayoutLM Model and Tokenizer loaded successfully")
 
 
 @asynccontextmanager
@@ -84,20 +87,21 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 def upload_to_s3(file_bytes: bytes, filename: str) -> str | None:
-    try:
-        s3  = boto3.client("s3", region_name=AWS_REGION)
-        key = f"invoices/{uuid.uuid4().hex}/{filename}"
-        s3.put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
-        logger.info(f"Uploaded to S3: {key}")
-        return key
-    except Exception as e:
-        logger.error(f"S3 upload failed: {e}")
+    # try:
+    #     s3  = boto3.client("s3", region_name=AWS_REGION)
+    #     key = f"invoices/{uuid.uuid4().hex}/{filename}"
+    #     s3.put_object(Bucket=S3_BUCKET, Key=key, Body=file_bytes)
+    #     logger.info(f"Uploaded to S3: {key}")
+    #     return key
+    # except Exception as e:
+    #     logger.error(f"S3 upload failed: {e}")
         return None
 
 
@@ -146,7 +150,6 @@ def extract_tokens_from_image(image: Image.Image):
 
     logger.debug(f"OCR extracted {len(tokens)} tokens")
     return tokens, bboxes, img_width, img_height
-
 
 
 def normalize_bbox(bbox, w, h):
@@ -215,12 +218,11 @@ def fallback_extraction(tokens: list) -> dict:
 
 def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -> dict:
     if model is None or tokenizer is None:
-        return {
-            "company": "MOCK COMPANY", "date": "01/01/2024",
-            "total": "100.00",         "address": "123 Mock Street",
-            "company_score": 0.91,     "date_score": 0.88,
-            "total_score": 0.95,       "address_score": 0.72,
-        }
+        logger.warning("Model or Tokenizer not available, using OCR fallback extraction.")
+        return fallback_extraction(tokens)
+
+    raw_id2label = getattr(model.config, "id2label", ID2LABEL)
+    active_id2label = {int(k): v for k, v in raw_id2label.items()}
 
     norm_bboxes = [normalize_bbox(b, img_width, img_height) for b in bboxes]
 
@@ -248,6 +250,8 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
     pred_ids  = torch.argmax(logits, dim=-1).tolist()
     max_probs = probs.max(dim=-1).values.tolist()
 
+    logger.info(f"Predicted class IDs: {set(pred_ids)}")
+
     entities      = {f: [] for f in FIELDS}
     entity_probs  = {f: [] for f in FIELDS}
     seen          = set()
@@ -257,12 +261,12 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
             continue
         seen.add(wid)
 
-        label = ID2LABEL.get(pred_ids[idx], "O")
+        label = active_id2label.get(pred_ids[idx], "O")
         if label == "O":
             continue
 
-        _, etype = label.split("-", 1)
-        key      = FIELD_MAP.get(etype)
+        etype = label.split("-")[-1].upper()
+        key   = FIELD_MAP.get(etype)
         if key:
             entities[key].append(tokens[wid])
             entity_probs[key].append(max_probs[idx])
@@ -272,21 +276,15 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
         if entities[f]:
             raw_value = " ".join(entities[f])
             avg_conf  = sum(entity_probs[f]) / len(entity_probs[f])
-
-            if avg_conf >= 0.50:
-                result[f]            = raw_value
-                result[f"{f}_score"] = round(avg_conf, 4)
-            else:
-                result[f]            = None
-                result[f"{f}_score"] = round(avg_conf, 4)
+            result[f]            = raw_value
+            result[f"{f}_score"] = round(avg_conf, 4)
         else:
             result[f]            = None
             result[f"{f}_score"] = 0.0
 
     if result.get("date"):
-        date_val = result["date"]
-        parts    = date_val.split()
-        seen_p   = []
+        parts  = result["date"].split()
+        seen_p = []
         for p in parts:
             if p not in seen_p:
                 seen_p.append(p)
@@ -300,7 +298,7 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
                 result[f"{f}_score"] = fb.get(f"{f}_score", 0.0)
 
     if all(result[f] is None for f in FIELDS):
-        logger.warning("Empty model output → full fallback used")
+        logger.warning("Empty model output -> fallback extraction used.")
         return fallback_extraction(tokens)
 
     return result
@@ -308,22 +306,50 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
 
 def format_response(invoice_id: str, raw: dict, s3_key: str | None, start: float):
     return {
-        "invoice_id":       invoice_id,
-        "s3_key":           s3_key,
-        "extracted_fields": {f: raw.get(f) for f in FIELDS},
-        "confidence_scores":{f: raw.get(f"{f}_score", 0.0) for f in FIELDS},
+        "invoice_id":        invoice_id,
+        "s3_key":            s3_key,
+        "extracted_fields":  {f: raw.get(f) for f in FIELDS},
+        "confidence_scores": {f: raw.get(f"{f}_score", 0.0) for f in FIELDS},
         "processing_time_ms": round((time.time() - start) * 1000, 2),
-        "model_mode": "mock" if model is None else "finetuned",
+        "model_mode":        "mock" if model is None else "finetuned",
     }
 
+
+# ================= Dashboard & Health Endpoints =================
 
 @app.get("/health")
 def health():
     return {
-        "status":       "ok",
-        "model_loaded": model is not None,
-        "model_path":   MODEL_PATH,
+        "status":        "ok",
+        "model_loaded":  model is not None,
+        "model_path":    MODEL_PATH,
     }
+
+
+@app.get("/api/invoices")
+def get_all_invoices():
+    return LOCAL_INVOICES_DB
+
+@app.post("/api/invoices/upload")
+@app.post("/api/invoices")
+async def create_invoice_via_api(file: UploadFile = File(...)):
+    """مسار مخصص للداشبورد عندما ترسل الملف إلى /api/invoices بدلاً من /extract"""
+    return await extract(file)
+
+@app.delete("/api/invoices/{inv_id}")
+def delete_invoice(inv_id: str):
+    global LOCAL_INVOICES_DB
+    LOCAL_INVOICES_DB = [i for i in LOCAL_INVOICES_DB if i.get("id") != inv_id and i.get("invoice_id") != inv_id]
+    return {"deleted": True, "id": inv_id}
+
+
+@app.put("/api/invoices/{inv_id}/confirm")
+def confirm_invoice(inv_id: str):
+    for inv in LOCAL_INVOICES_DB:
+        if inv.get("id") == inv_id or inv.get("invoice_id") == inv_id:
+            inv["status"] = "CONFIRMED"
+            return inv
+    return {"status": "ok"}
 
 
 @app.post("/extract")
@@ -339,7 +365,8 @@ async def extract(file: UploadFile = File(...)):
         )
 
     file_bytes = await file.read()
-    s3_key     = upload_to_s3(file_bytes, file.filename)
+    # s3_key     = upload_to_s3(file_bytes, file.filename)
+    s3_key     = None
 
     try:
         if file.content_type == "application/pdf":
@@ -360,30 +387,49 @@ async def extract(file: UploadFile = File(...)):
     raw    = run_inference(tokens, bboxes, img_width, img_height)
     result = format_response(invoice_id, raw, s3_key, start)
 
+    # حفظ في السجلات لتظهر في لوحة التحكم فوراً
+    record = {
+        "id": invoice_id,
+        "invoice_id": invoice_id,
+        "filename": file.filename,
+        "company": raw.get("company") or "N/A",
+        "date": raw.get("date") or "N/A",
+        "total": raw.get("total") or "N/A",
+        "address": raw.get("address") or "N/A",
+        "company_score": raw.get("company_score", 0.0),
+        "date_score": raw.get("date_score", 0.0),
+        "total_score": raw.get("total_score", 0.0),
+        "address_score": raw.get("address_score", 0.0),
+        "status": "PENDING",
+        "processing_time": result["processing_time_ms"],
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S")
+    }
+    LOCAL_INVOICES_DB.insert(0, record)
+
     logger.info(f"[{invoice_id}] Done in {result['processing_time_ms']} ms")
     return result
 
 
-@app.post("/extract-from-s3")
-async def extract_from_s3(s3_key: str):
-    start      = time.time()
-    invoice_id = f"INV_{uuid.uuid4().hex[:8].upper()}"
+# @app.post("/extract-from-s3")
+# async def extract_from_s3(s3_key: str):
+#     start       = time.time()
+#     invoice_id = f"INV_{uuid.uuid4().hex[:8].upper()}"
 
-    try:
-        s3           = boto3.client("s3", region_name=AWS_REGION)
-        obj          = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
-        file_bytes   = obj["Body"].read()
-        content_type = obj.get("ContentType", "image/jpeg")
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"S3 object not found: {e}")
+#     try:
+#         s3           = boto3.client("s3", region_name=AWS_REGION)
+#         obj          = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
+#         file_bytes   = obj["Body"].read()
+#         content_type = obj.get("ContentType", "image/jpeg")
+#     except Exception as e:
+#         raise HTTPException(status_code=404, detail=f"S3 object not found: {e}")
 
-    if "pdf" in content_type:
-        from pdf2image import convert_from_bytes
-        image = convert_from_bytes(file_bytes)[0]
-    else:
-        image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+#     if "pdf" in content_type:
+#         from pdf2image import convert_from_bytes
+#         image = convert_from_bytes(file_bytes)[0]
+#     else:
+#         image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
 
-    tokens, bboxes, img_width, img_height = extract_tokens_from_image(image)
-    raw    = run_inference(tokens, bboxes, img_width, img_height)
-    result = format_response(invoice_id, raw, s3_key, start)
-    return result
+#     tokens, bboxes, img_width, img_height = extract_tokens_from_image(image)
+#     raw    = run_inference(tokens, bboxes, img_width, img_height)
+#     result = format_response(invoice_id, raw, s3_key, start)
+#     return result
