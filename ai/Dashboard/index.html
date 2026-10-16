@@ -563,7 +563,7 @@ header {
 
 <!-- <script src="demo-backend.js"></script> -->
 <script>
-const BACKEND = 'http://127.0.0.1:8000';
+const BACKEND = 'https://dollhouse-tributary-viable.ngrok-free.dev';
 // const BACKEND = 'https://ntajbpjvngbmfssgn5img3usnu0czjkk.lambda-url.us-east-1.on.aws';
 function toggleTheme() {
   const h = document.documentElement;
@@ -633,7 +633,13 @@ async function uploadFile(file) {
   document.getElementById('processingContent').classList.add('active');
   const fd = new FormData(); fd.append('file', file);
   try {
-    const r = await fetch(`${BACKEND}/api/invoices/upload`, { method:'POST', body:fd });
+    const r = await fetch(`${BACKEND}/api/invoices/upload`, { 
+      method: 'POST', 
+      body: fd,
+      headers: {
+        'ngrok-skip-browser-warning': 'true'
+      }
+    });
     if (!r.ok) throw new Error(await r.text());
     showToast('Invoice processed successfully');
     await loadInvoices();
