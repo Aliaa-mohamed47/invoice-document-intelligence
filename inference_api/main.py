@@ -84,12 +84,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# إعداد CORS الشامل لمنع أي حجب مع GitHub Pages ونفق ngrok
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,  
+    allow_origins=[
+        "https://aliaa-mohamed47.github.io",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "*"
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*", "ngrok-skip-browser-warning"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
@@ -210,9 +217,9 @@ def fallback_extraction(tokens: list) -> dict:
         "total":         total,
         "address":       address,
         "company_score": 0.45 if company  else 0.0,
-        "date_score":    0.50 if date     else 0.0,
-        "total_score":   0.55 if total    else 0.0,
-        "address_score": 0.45 if address  else 0.0,
+        "date_score":    0.50 if date      else 0.0,
+        "total_score":   0.55 if total     else 0.0,
+        "address_score": 0.45 if address   else 0.0,
     }
 
 
@@ -306,16 +313,24 @@ def run_inference(tokens: list, bboxes: list, img_width: int, img_height: int) -
 
 def format_response(invoice_id: str, raw: dict, s3_key: str | None, start: float):
     return {
-        "invoice_id":        invoice_id,
-        "s3_key":            s3_key,
-        "extracted_fields":  {f: raw.get(f) for f in FIELDS},
-        "confidence_scores": {f: raw.get(f"{f}_score", 0.0) for f in FIELDS},
+        "invoice_id":         invoice_id,
+        "s3_key":             s3_key,
+        "extracted_fields":   {f: raw.get(f) for f in FIELDS},
+        "confidence_scores":  {f: raw.get(f"{f}_score", 0.0) for f in FIELDS},
         "processing_time_ms": round((time.time() - start) * 1000, 2),
-        "model_mode":        "mock" if model is None else "finetuned",
+        "model_mode":         "mock" if model is None else "finetuned",
     }
 
 
 # ================= Dashboard & Health Endpoints =================
+
+@app.get("/")
+def read_root():
+    return {
+        "status": "online",
+        "message": "Invoice Intelligence Backend is running"
+    }
+
 
 @app.get("/health")
 def health():
@@ -330,10 +345,12 @@ def health():
 def get_all_invoices():
     return LOCAL_INVOICES_DB
 
+
 @app.post("/api/invoices/upload")
 @app.post("/api/invoices")
 async def create_invoice_via_api(file: UploadFile = File(...)):
     return await extract(file)
+
 
 @app.delete("/api/invoices/{inv_id}")
 def delete_invoice(inv_id: str):
