@@ -42,3 +42,7 @@ backend/target/
 # ── OS ───────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+ai/model/
+backend/invoicedb.db
+*.safetensors
+*.bin

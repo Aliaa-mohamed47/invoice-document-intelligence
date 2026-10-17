@@ -87,7 +87,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,  # تم تغييرها لـ False لتتوافق مع "*"
+    allow_credentials=False,  
     allow_methods=["*"],
     allow_headers=["*", "ngrok-skip-browser-warning"],
 )
@@ -333,7 +333,6 @@ def get_all_invoices():
 @app.post("/api/invoices/upload")
 @app.post("/api/invoices")
 async def create_invoice_via_api(file: UploadFile = File(...)):
-    """مسار مخصص للداشبورد عندما ترسل الملف إلى /api/invoices بدلاً من /extract"""
     return await extract(file)
 
 @app.delete("/api/invoices/{inv_id}")
